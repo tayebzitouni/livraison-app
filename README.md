@@ -12,6 +12,7 @@ Prototype Flutter مبني على الـrapport والصور المرفقة. ا�
 - التقرير المالي: الكاش المحصل، أرباح التوصيل، وعدد المهام وتفاصيل العهدة.
 - قاعدة بيانات مركزية أولية في `lib/data/app_database.dart` تشمل المنتجات والطلبات وقيود المحفظة.
 - schema production في `supabase/schema.sql` للجداول: profiles, products, orders, order_items, wallet_entries, settlements مع دالة تمنع السحب المزدوج.
+- دورة الطلب: `draft` عند الإرسال → `confirmed` عند قبول السائق → `picked_up` عند الاستلام → `delivered` عند التسليم. عند `delivered` تسجل المحفظة تلقائياً 80% لصاحب الطبق، 20% عمولة الإدارة، وأجرة التوصيل.
 
 ## التشغيل
 
