@@ -23,7 +23,9 @@ class AppDatabase extends ChangeNotifier {
     orders = [
       {
         'id': 'TJ-104',
-        'status': 'قيد التحضير',
+        'status': 'draft',
+        'foodTotal': 1100,
+        'deliveryFee': 200,
         'total': 1300,
         'customer': 'فتحي',
       },
@@ -43,21 +45,61 @@ class AppDatabase extends ChangeNotifier {
   late final List<Map<String, dynamic>> orders;
   late final List<Map<String, dynamic>> walletEntries;
 
-  void createOrder({required int total, required int itemCount}) {
+  void createOrder({
+    required int foodTotal,
+    required int itemCount,
+    int deliveryFee = 200,
+  }) {
     final id = 'TJ-${104 + orders.length}';
     orders.insert(0, {
       'id': id,
-      'status': 'قيد التحضير',
-      'total': total,
+      'status': 'draft',
+      'foodTotal': foodTotal,
+      'deliveryFee': deliveryFee,
+      'total': foodTotal + deliveryFee,
       'items': itemCount,
       'customer': 'فتحي',
     });
-    walletEntries.add({
-      'orderId': id,
-      'type': 'order',
-      'amount': total,
-      'createdAt': DateTime.now(),
-    });
+    notifyListeners();
+  }
+
+  void confirmOrder(String id) {
+    final order = orders.firstWhere((item) => item['id'] == id);
+    if (order['status'] == 'draft') {
+      order['status'] = 'confirmed';
+      notifyListeners();
+    }
+  }
+
+  void advanceOrder(String id) {
+    final order = orders.firstWhere((item) => item['id'] == id);
+    final status = order['status'];
+    if (status == 'confirmed') {
+      order['status'] = 'picked_up';
+    } else if (status == 'picked_up') {
+      order['status'] = 'delivered';
+      final foodTotal = order['foodTotal'] as int;
+      walletEntries.addAll([
+        {
+          'orderId': id,
+          'type': 'provider_credit',
+          'amount': (foodTotal * .8).round(),
+          'createdAt': DateTime.now(),
+        },
+        {
+          'orderId': id,
+          'type': 'admin_commission',
+          'amount': (foodTotal * .2).round(),
+          'createdAt': DateTime.now(),
+        },
+        {
+          'orderId': id,
+          'type': 'delivery_fee',
+          'amount': order['deliveryFee'],
+          'createdAt': DateTime.now(),
+        },
+      ]);
+    }
     notifyListeners();
   }
 

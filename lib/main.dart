@@ -74,7 +74,7 @@ class _ShellState extends State<Shell> {
   Widget build(BuildContext context) {
     Widget page;
     if (driver) {
-      page = Driver(onBack: () => setState(() => driver = false));
+      page = DriverLive(db: db, onBack: () => setState(() => driver = false));
     } else if (index == 0) {
       page = Home(
         cart: cart,
@@ -85,7 +85,7 @@ class _ShellState extends State<Shell> {
     } else if (index == 1) {
       page = Favorites(onAdd: add);
     } else if (index == 2) {
-      page = Orders(onReorder: () => add(menu[0]));
+      page = OrdersLive(db: db, onReorder: () => add(menu[0]));
     } else {
       page = Profile(onDriver: () => setState(() => driver = true));
     }
@@ -135,7 +135,7 @@ class _ShellState extends State<Shell> {
         total: total,
         onDone: () {
           db.createOrder(
-            total: (total == 0 ? 800 : total) + 200,
+            foodTotal: total == 0 ? 800 : total,
             itemCount: cart == 0 ? 1 : cart,
           );
           Navigator.pop(context);
@@ -1081,4 +1081,219 @@ class Finance extends StatelessWidget {
       ],
     ),
   );
+}
+
+/// Live customer order list backed by the shared database adapter.
+class OrdersLive extends StatelessWidget {
+  final AppDatabase db;
+  final VoidCallback onReorder;
+  const OrdersLive({super.key, required this.db, required this.onReorder});
+
+  String label(String status) => switch (status) {
+    'draft' => 'مسودة • بانتظار السائق',
+    'confirmed' => 'تم التأكيد',
+    'picked_up' => 'في الطريق',
+    'delivered' => 'تم التسليم',
+    _ => status,
+  };
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: db,
+    builder: (context, _) => ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        const TitleBlock('طلباتي', 'حالة طلبك تتحدث مباشرة'),
+        const SizedBox(height: 18),
+        ...db.orders.map(
+          (order) => Container(
+            margin: const EdgeInsets.only(bottom: 14),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      'الطلب #${order['id']}',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    const Spacer(),
+                    Text(
+                      label(order['status'] as String),
+                      style: TextStyle(
+                        color: order['status'] == 'delivered'
+                            ? C.green
+                            : C.orange,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+                const Divider(height: 24),
+                Row(
+                  children: [
+                    const Text(
+                      'المبلغ الإجمالي',
+                      style: TextStyle(color: C.muted),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${order['total']} دج',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        color: C.orange,
+                        fontSize: 17,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: onReorder,
+                  child: const Text('إعادة الطلب'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+/// Driver queue: draft orders become confirmed, picked up, then delivered.
+class DriverLive extends StatelessWidget {
+  final AppDatabase db;
+  final VoidCallback onBack;
+  const DriverLive({super.key, required this.db, required this.onBack});
+
+  @override
+  Widget build(BuildContext context) => Container(
+    color: C.dark,
+    child: AnimatedBuilder(
+      animation: db,
+      builder: (context, _) => ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          Row(
+            children: [
+              IconButton(
+                onPressed: onBack,
+                icon: const Icon(Icons.arrow_forward, color: Colors.white),
+              ),
+              const Expanded(
+                child: Text(
+                  'طلبات السائق',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 24,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const Text(
+            'الطلبات الجديدة تظهر هنا كمسودة',
+            style: TextStyle(color: Colors.white60),
+          ),
+          const SizedBox(height: 20),
+          ...db.orders.map((order) => _DriverOrder(db: db, order: order)),
+        ],
+      ),
+    ),
+  );
+}
+
+class _DriverOrder extends StatelessWidget {
+  final AppDatabase db;
+  final Map<String, dynamic> order;
+  const _DriverOrder({required this.db, required this.order});
+
+  @override
+  Widget build(BuildContext context) {
+    final status = order['status'] as String;
+    final isDone = status == 'delivered';
+    final action = status == 'draft'
+        ? 'تأكيد الطلب'
+        : status == 'confirmed'
+        ? 'تأكيد استلام الطلب'
+        : status == 'picked_up'
+        ? 'تأكيد التسليم'
+        : 'تم تحويل المستحقات';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xff493a34),
+        borderRadius: BorderRadius.circular(19),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                '#${order['id']}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 18,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '${order['total']} دج',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            status == 'draft' ? 'طلب جديد من فتحي' : 'حالة الطلب: $status',
+            style: const TextStyle(color: Colors.white70),
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton(
+              onPressed: isDone
+                  ? null
+                  : () => status == 'draft'
+                        ? db.confirmOrder(order['id'] as String)
+                        : db.advanceOrder(order['id'] as String),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: status == 'draft' ? C.orange : C.green,
+                foregroundColor: Colors.white,
+              ),
+              child: Text(action),
+            ),
+          ),
+          if (status == 'confirmed' || status == 'picked_up') ...[
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              height: 44,
+              child: OutlinedButton(
+                onPressed: () => db.advanceOrder(order['id'] as String),
+                style: OutlinedButton.styleFrom(foregroundColor: Colors.white),
+                child: Text(
+                  status == 'confirmed' ? 'استلام من المطبخ' : 'تسليم للزبون',
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }
