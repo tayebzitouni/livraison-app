@@ -1807,7 +1807,7 @@ class _DriverWorkspaceState extends State<DriverWorkspace> {
     ),
     body: AnimatedBuilder(
       animation: widget.db,
-      builder: (_, __) => switch (tab) {
+      builder: (_, _) => switch (tab) {
         0 => driverOrders(),
         1 => driverStats(),
         _ => driverProfile(),
@@ -1855,10 +1855,11 @@ class _DriverWorkspaceState extends State<DriverWorkspace> {
           onDetails: () => showOrder(order),
           onAction: () {
             final id = order['id'] as String;
-            if (order['status'] == 'draft')
+            if (order['status'] == 'draft') {
               widget.db.confirmOrder(id);
-            else
+            } else {
               widget.db.advanceOrder(id);
+            }
           },
         ),
       ),
@@ -2267,7 +2268,7 @@ class _PartnerWorkspaceState extends State<PartnerWorkspace> {
     ),
     body: AnimatedBuilder(
       animation: widget.db,
-      builder: (_, __) => switch (tab) {
+      builder: (_, _) => switch (tab) {
         0 => overview(),
         1 => orders(),
         _ => profile(),
