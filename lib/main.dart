@@ -296,11 +296,15 @@ class _ShellState extends State<Shell> {
   Widget build(BuildContext context) {
     Widget page;
     if (widget.user.role == UserRole.driver) {
-      page = DriverLive(db: db, onBack: widget.onLogout);
+      page = DriverWorkspace(db: db, onLogout: widget.onLogout);
     } else if (driver) {
       page = DriverLive(db: db, onBack: () => setState(() => driver = false));
     } else if (widget.user.role != UserRole.client) {
-      page = PartnerPortal(role: widget.user.role, onLogout: widget.onLogout);
+      page = PartnerWorkspace(
+        db: db,
+        role: widget.user.role,
+        onLogout: widget.onLogout,
+      );
     } else if (index == 0) {
       page = Home(cart: cart, onAdd: add, onCart: () => openCart());
     } else if (index == 1) {
@@ -1711,5 +1715,741 @@ class PartnerOrderCard extends StatelessWidget {
         style: const TextStyle(fontWeight: FontWeight.w800),
       ),
     ),
+  );
+}
+
+class DriverWorkspace extends StatefulWidget {
+  final AppDatabase db;
+  final VoidCallback onLogout;
+  const DriverWorkspace({super.key, required this.db, required this.onLogout});
+  @override
+  State<DriverWorkspace> createState() => _DriverWorkspaceState();
+}
+
+class _DriverWorkspaceState extends State<DriverWorkspace> {
+  int tab = 0;
+  String statusText(String status) => switch (status) {
+    'draft' => 'مسودة جديدة',
+    'confirmed' => 'مؤكد • جاهز للاستلام',
+    'picked_up' => 'في الطريق',
+    'delivered' => 'تم التسليم',
+    _ => status,
+  };
+
+  void showOrder(Map<String, dynamic> order) => showModalBottomSheet(
+    context: context,
+    showDragHandle: true,
+    backgroundColor: C.bg,
+    builder: (_) => Directionality(
+      textDirection: TextDirection.rtl,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 30),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'تفاصيل الطلب #${order['id']}',
+              style: const TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 21,
+                color: C.text,
+              ),
+            ),
+            const SizedBox(height: 14),
+            DetailLine('الزبون', order['customer'] as String? ?? 'فتحي'),
+            DetailLine('المنتجات', '${order['items'] ?? 2} أصناف'),
+            DetailLine('المبلغ', '${order['total']} دج'),
+            DetailLine('الحالة', statusText(order['status'] as String)),
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  setState(() => tab = 0);
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: C.orange,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('إغلاق التفاصيل'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: C.bg,
+    appBar: AppBar(
+      backgroundColor: C.dark,
+      foregroundColor: Colors.white,
+      title: Text(
+        tab == 0
+            ? 'طلبات التوصيل'
+            : tab == 1
+            ? 'إحصائيات السائق'
+            : 'ملفي الشخصي',
+        style: const TextStyle(fontWeight: FontWeight.w800),
+      ),
+      actions: [
+        IconButton(
+          onPressed: widget.onLogout,
+          tooltip: 'تسجيل الخروج',
+          icon: const Icon(Icons.logout),
+        ),
+      ],
+    ),
+    body: AnimatedBuilder(
+      animation: widget.db,
+      builder: (_, __) => switch (tab) {
+        0 => driverOrders(),
+        1 => driverStats(),
+        _ => driverProfile(),
+      },
+    ),
+    bottomNavigationBar: NavigationBar(
+      selectedIndex: tab,
+      onDestinationSelected: (i) => setState(() => tab = i),
+      backgroundColor: Colors.white,
+      indicatorColor: C.pale,
+      destinations: const [
+        NavigationDestination(
+          icon: Icon(Icons.receipt_long_outlined),
+          selectedIcon: Icon(Icons.receipt_long),
+          label: 'الطلبات',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.insights_outlined),
+          selectedIcon: Icon(Icons.insights),
+          label: 'إحصائيات',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.person_outline),
+          selectedIcon: Icon(Icons.person),
+          label: 'الملف',
+        ),
+      ],
+    ),
+  );
+
+  Widget driverOrders() => ListView(
+    padding: const EdgeInsets.all(20),
+    children: [
+      const TitleBlock(
+        'طلبات التوصيل',
+        'كل طلب جديد يظهر هنا ويمكنك تحديث حالته',
+      ),
+      const SizedBox(height: 16),
+      if (widget.db.orders.isEmpty)
+        const EmptyState(text: 'ما كاش طلبات جديدة'),
+      ...widget.db.orders.map(
+        (order) => DriverOrderCard(
+          order: order,
+          statusText: statusText(order['status'] as String),
+          onDetails: () => showOrder(order),
+          onAction: () {
+            final id = order['id'] as String;
+            if (order['status'] == 'draft')
+              widget.db.confirmOrder(id);
+            else
+              widget.db.advanceOrder(id);
+          },
+        ),
+      ),
+    ],
+  );
+
+  Widget driverStats() {
+    final deliveries = widget.db.orders
+        .where((o) => o['status'] == 'delivered')
+        .length;
+    final deliveryFees = widget.db.walletEntries
+        .where((e) => e['type'] == 'delivery_fee')
+        .fold<int>(0, (s, e) => s + (e['amount'] as int));
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        const TitleBlock('إحصائيات السائق', 'ملخص الأداء والعهدة اليومية'),
+        const SizedBox(height: 18),
+        Row(
+          children: [
+            Expanded(
+              child: MetricCard(
+                label: 'الطلبات المسلّمة',
+                value: '$deliveries',
+                icon: Icons.check_circle_outline,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: MetricCard(
+                label: 'أرباح التوصيل',
+                value: '$deliveryFees دج',
+                icon: Icons.payments_outlined,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'تقدم اليوم',
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17),
+              ),
+              const SizedBox(height: 14),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: LinearProgressIndicator(
+                  value: widget.db.orders.isEmpty
+                      ? 0
+                      : deliveries / widget.db.orders.length,
+                  minHeight: 12,
+                  color: C.green,
+                  backgroundColor: C.pale,
+                ),
+              ),
+              const SizedBox(height: 9),
+              Text(
+                '$deliveries من ${widget.db.orders.length} طلبات مكتملة',
+                style: const TextStyle(color: C.muted),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: C.dark,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'العهدة الواجب تسليمها',
+                style: TextStyle(color: Colors.white70),
+              ),
+              SizedBox(height: 6),
+              Text(
+                '1,100 دج',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 28,
+                ),
+              ),
+              SizedBox(height: 5),
+              Text(
+                'تتحدث بعد كل عملية تسليم',
+                style: TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget driverProfile() => ListView(
+    padding: const EdgeInsets.all(20),
+    children: [
+      const TitleBlock('ملفي الشخصي', 'إعدادات حساب السائق'),
+      const SizedBox(height: 18),
+      const ProfileHero(
+        name: 'سائق وصلة',
+        role: 'سائق توصيل • متصل الآن',
+        icon: Icons.local_shipping,
+      ),
+      const SizedBox(height: 14),
+      const ActionTile(Icons.badge_outlined, 'معلومات الحساب', 'تعديل'),
+      const ActionTile(Icons.notifications_none, 'الإشعارات', 'مفعّلة'),
+      ActionTile(
+        Icons.logout,
+        'تسجيل الخروج',
+        'خروج آمن',
+        onTap: widget.onLogout,
+      ),
+    ],
+  );
+}
+
+class DriverOrderCard extends StatelessWidget {
+  final Map<String, dynamic> order;
+  final String statusText;
+  final VoidCallback onDetails, onAction;
+  const DriverOrderCard({
+    super.key,
+    required this.order,
+    required this.statusText,
+    required this.onDetails,
+    required this.onAction,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final status = order['status'] as String;
+    final done = status == 'delivered';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xffece7e2)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: done ? C.green : C.orange,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '#${order['id']}',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 17,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '${order['total']} دج',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: C.orange,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 7),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Text(
+              statusText,
+              style: TextStyle(color: done ? C.green : C.muted, fontSize: 12),
+            ),
+          ),
+          const Divider(height: 22),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: onDetails,
+                  child: const Text('التفاصيل'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: done ? null : onAction,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: status == 'draft' ? C.orange : C.green,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: Text(
+                    done
+                        ? 'مكتمل'
+                        : status == 'draft'
+                        ? 'تأكيد'
+                        : 'تحديث الحالة',
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class DetailLine extends StatelessWidget {
+  final String label, value;
+  const DetailLine(this.label, this.value, {super.key});
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 6),
+    child: Row(
+      children: [
+        Text(label, style: const TextStyle(color: C.muted)),
+        const Spacer(),
+        Text(
+          value,
+          style: const TextStyle(fontWeight: FontWeight.bold, color: C.text),
+        ),
+      ],
+    ),
+  );
+}
+
+class EmptyState extends StatelessWidget {
+  final String text;
+  const EmptyState({super.key, required this.text});
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.all(40),
+    child: Center(
+      child: Column(
+        children: [
+          const Icon(Icons.inbox_outlined, size: 58, color: C.muted),
+          const SizedBox(height: 10),
+          Text(
+            text,
+            style: const TextStyle(color: C.muted, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class ProfileHero extends StatelessWidget {
+  final String name, role;
+  final IconData icon;
+  const ProfileHero({
+    super.key,
+    required this.name,
+    required this.role,
+    required this.icon,
+  });
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(18),
+    decoration: BoxDecoration(
+      color: C.dark,
+      borderRadius: BorderRadius.circular(20),
+    ),
+    child: Row(
+      children: [
+        CircleAvatar(
+          radius: 28,
+          backgroundColor: C.orange,
+          child: Icon(icon, color: Colors.white),
+        ),
+        const SizedBox(width: 14),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              name,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+                fontSize: 17,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              role,
+              style: const TextStyle(color: Colors.white60, fontSize: 12),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
+}
+
+class PartnerWorkspace extends StatefulWidget {
+  final AppDatabase db;
+  final UserRole role;
+  final VoidCallback onLogout;
+  const PartnerWorkspace({
+    super.key,
+    required this.db,
+    required this.role,
+    required this.onLogout,
+  });
+  @override
+  State<PartnerWorkspace> createState() => _PartnerWorkspaceState();
+}
+
+class _PartnerWorkspaceState extends State<PartnerWorkspace> {
+  int tab = 0;
+  String get title => switch (widget.role) {
+    UserRole.restaurant => 'المطعم',
+    UserRole.supplier => 'المورد',
+    _ => 'المدير العام',
+  };
+  String get roleText => switch (widget.role) {
+    UserRole.restaurant => 'إدارة الأطباق والطلبات والأرباح',
+    UserRole.supplier => 'التوريد والفواتير والحسابات',
+    _ => 'الخزينة والعمولات والتسويات',
+  };
+
+  String status(String s) => switch (s) {
+    'draft' => 'مسودة',
+    'confirmed' => 'مؤكد',
+    'picked_up' => 'في الطريق',
+    'delivered' => 'تم التسليم',
+    _ => s,
+  };
+
+  void orderDetails(Map<String, dynamic> order) => showModalBottomSheet(
+    context: context,
+    showDragHandle: true,
+    backgroundColor: C.bg,
+    builder: (_) => Directionality(
+      textDirection: TextDirection.rtl,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 5, 20, 30),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'تفاصيل الطلب #${order['id']}',
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 15),
+            DetailLine('الزبون', order['customer'] as String? ?? 'فتحي'),
+            DetailLine('الحالة', status(order['status'] as String)),
+            DetailLine('الإجمالي', '${order['total']} دج'),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: C.orange,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('تم'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: C.bg,
+    appBar: AppBar(
+      backgroundColor: C.dark,
+      foregroundColor: Colors.white,
+      title: Text(
+        tab == 0
+            ? 'لوحة $title'
+            : tab == 1
+            ? 'طلبات $title'
+            : 'ملف $title',
+        style: const TextStyle(fontWeight: FontWeight.w800),
+      ),
+      actions: [
+        IconButton(
+          onPressed: widget.onLogout,
+          tooltip: 'تسجيل الخروج',
+          icon: const Icon(Icons.logout),
+        ),
+      ],
+    ),
+    body: AnimatedBuilder(
+      animation: widget.db,
+      builder: (_, __) => switch (tab) {
+        0 => overview(),
+        1 => orders(),
+        _ => profile(),
+      },
+    ),
+    bottomNavigationBar: NavigationBar(
+      selectedIndex: tab,
+      onDestinationSelected: (i) => setState(() => tab = i),
+      backgroundColor: Colors.white,
+      indicatorColor: C.pale,
+      destinations: const [
+        NavigationDestination(
+          icon: Icon(Icons.dashboard_outlined),
+          selectedIcon: Icon(Icons.dashboard),
+          label: 'الرئيسية',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.receipt_long_outlined),
+          selectedIcon: Icon(Icons.receipt_long),
+          label: 'الطلبات',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.person_outline),
+          selectedIcon: Icon(Icons.person),
+          label: 'الملف',
+        ),
+      ],
+    ),
+  );
+
+  Widget overview() {
+    final delivered = widget.db.orders
+        .where((o) => o['status'] == 'delivered')
+        .length;
+    final pending = widget.db.orders
+        .where((o) => o['status'] != 'delivered')
+        .length;
+    final wallet = widget.db.walletEntries.fold<int>(
+      0,
+      (s, e) => s + (e['amount'] as int),
+    );
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        TitleBlock('لوحة $title', roleText),
+        const SizedBox(height: 18),
+        Row(
+          children: [
+            Expanded(
+              child: MetricCard(
+                label: 'طلبات اليوم',
+                value: '${widget.db.orders.length}',
+                icon: Icons.receipt_long_outlined,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: MetricCard(
+                label: 'طلبات معلقة',
+                value: '$pending',
+                icon: Icons.hourglass_top_outlined,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: MetricCard(
+                label: 'تم التسليم',
+                value: '$delivered',
+                icon: Icons.check_circle_outline,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: MetricCard(
+                label: 'رصيد المحفظة',
+                value: '$wallet دج',
+                icon: Icons.account_balance_wallet_outlined,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: C.dark,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('ملخص مالي', style: TextStyle(color: Colors.white70)),
+              SizedBox(height: 8),
+              Text(
+                '80% مستحق للشريك  •  20% عمولة الإدارة',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              SizedBox(height: 7),
+              Text(
+                'يتم إنشاء القيود تلقائياً عند إتمام التسليم.',
+                style: TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+        const Text(
+          'آخر الطلبات',
+          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 19),
+        ),
+        const SizedBox(height: 10),
+        ...widget.db.orders
+            .take(3)
+            .map(
+              (o) => PartnerOrderCard(
+                code: '#${o['id']}',
+                status: status(o['status'] as String),
+                total: '${o['total']} دج',
+              ),
+            ),
+      ],
+    );
+  }
+
+  Widget orders() => ListView(
+    padding: const EdgeInsets.all(20),
+    children: [
+      TitleBlock('طلبات $title', 'افتح التفاصيل وتابع كل حالة'),
+      const SizedBox(height: 18),
+      ...widget.db.orders.map(
+        (o) => Card(
+          margin: const EdgeInsets.only(bottom: 10),
+          elevation: 0,
+          child: ListTile(
+            onTap: () => orderDetails(o),
+            leading: const CircleAvatar(
+              backgroundColor: C.pale,
+              child: Text('🍲'),
+            ),
+            title: Text(
+              '#${o['id']}',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: Text(status(o['status'] as String)),
+            trailing: Text(
+              '${o['total']} دج',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+
+  Widget profile() => ListView(
+    padding: const EdgeInsets.all(20),
+    children: [
+      TitleBlock('ملف $title', 'بيانات الحساب والصلاحيات'),
+      const SizedBox(height: 18),
+      ProfileHero(
+        name: title,
+        role: roleText,
+        icon: widget.role == UserRole.admin
+            ? Icons.admin_panel_settings
+            : Icons.storefront,
+      ),
+      const SizedBox(height: 14),
+      const ActionTile(Icons.verified_user_outlined, 'صلاحيات الحساب', 'نشطة'),
+      const ActionTile(Icons.notifications_none, 'الإشعارات', 'مفعّلة'),
+      ActionTile(
+        Icons.logout,
+        'تسجيل الخروج',
+        'خروج آمن',
+        onTap: widget.onLogout,
+      ),
+    ],
   );
 }
