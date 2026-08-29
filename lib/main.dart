@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'data/app_database.dart';
+import 'data/auth_service.dart';
 
 void main() => runApp(const App());
 
@@ -39,12 +40,233 @@ class App extends StatelessWidget {
       scaffoldBackgroundColor: C.bg,
       colorScheme: ColorScheme.fromSeed(seedColor: C.orange),
     ),
-    home: const Shell(),
+    home: const AuthGate(),
+  );
+}
+
+class AuthGate extends StatefulWidget {
+  const AuthGate({super.key});
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  final auth = AuthService.instance;
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: auth,
+    builder: (_, _) => auth.currentUser == null
+        ? LoginScreen(auth: auth)
+        : Shell(user: auth.currentUser!, onLogout: auth.logout),
+  );
+}
+
+class LoginScreen extends StatefulWidget {
+  final AuthService auth;
+  const LoginScreen({super.key, required this.auth});
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final email = TextEditingController();
+  final password = TextEditingController();
+  String? error;
+
+  @override
+  void dispose() {
+    email.dispose();
+    password.dispose();
+    super.dispose();
+  }
+
+  void submit() {
+    final user = widget.auth.login(email.text, password.text);
+    if (user == null) {
+      setState(
+        () =>
+            error = 'المعلومات غير صحيحة. استعمل أحد الحسابات التجريبية أدناه.',
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Directionality(
+    textDirection: TextDirection.rtl,
+    child: Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xfffff7ed), C.bg],
+          ),
+        ),
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 430),
+              child: Column(
+                children: [
+                  Container(
+                    width: 78,
+                    height: 78,
+                    decoration: BoxDecoration(
+                      color: C.dark,
+                      borderRadius: BorderRadius.circular(25),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x22352723),
+                          blurRadius: 22,
+                          offset: Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.restaurant_menu,
+                      color: C.orange,
+                      size: 40,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  const Text(
+                    'وصلة',
+                    style: TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.w900,
+                      color: C.text,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'من المطبخ لباب دارك',
+                    style: TextStyle(color: C.muted),
+                  ),
+                  const SizedBox(height: 28),
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: const Color(0xffeee6df)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'تسجيل الدخول',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                            color: C.text,
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        const Text(
+                          'ادخل لحسابك باش تتابع طلباتك',
+                          style: TextStyle(color: C.muted, fontSize: 12),
+                        ),
+                        const SizedBox(height: 18),
+                        TextField(
+                          controller: email,
+                          keyboardType: TextInputType.emailAddress,
+                          decoration: const InputDecoration(
+                            labelText: 'Email / رقم الحساب',
+                            prefixIcon: Icon(Icons.person_outline),
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: password,
+                          obscureText: true,
+                          onSubmitted: (_) => submit(),
+                          decoration: const InputDecoration(
+                            labelText: 'كلمة المرور',
+                            prefixIcon: Icon(Icons.lock_outline),
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        if (error != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 10),
+                            child: Text(
+                              error!,
+                              style: const TextStyle(
+                                color: Colors.red,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        const SizedBox(height: 18),
+                        SizedBox(
+                          width: double.infinity,
+                          height: 52,
+                          child: ElevatedButton(
+                            onPressed: submit,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: C.orange,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(15),
+                              ),
+                            ),
+                            child: const Text(
+                              'دخول إلى التطبيق',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: C.dark,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'حسابات التجربة',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        SizedBox(height: 10),
+                        Text(
+                          '1 / 1  ︱ زبون      2 / 2  ︱ سائق\n3 / 3  ︱ مطعم     4 / 4  ︱ مورد\n5 / 5  ︱ مدير عام',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            height: 1.8,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
   );
 }
 
 class Shell extends StatefulWidget {
-  const Shell({super.key});
+  final SessionUser user;
+  final VoidCallback onLogout;
+  const Shell({super.key, required this.user, required this.onLogout});
   @override
   State<Shell> createState() => _ShellState();
 }
@@ -73,21 +295,24 @@ class _ShellState extends State<Shell> {
   @override
   Widget build(BuildContext context) {
     Widget page;
-    if (driver) {
+    if (widget.user.role == UserRole.driver) {
+      page = DriverLive(db: db, onBack: widget.onLogout);
+    } else if (driver) {
       page = DriverLive(db: db, onBack: () => setState(() => driver = false));
+    } else if (widget.user.role != UserRole.client) {
+      page = PartnerPortal(role: widget.user.role, onLogout: widget.onLogout);
     } else if (index == 0) {
-      page = Home(
-        cart: cart,
-        onAdd: add,
-        onCart: () => openCart(),
-        onDriver: () => setState(() => driver = true),
-      );
+      page = Home(cart: cart, onAdd: add, onCart: () => openCart());
     } else if (index == 1) {
       page = Favorites(onAdd: add);
     } else if (index == 2) {
       page = OrdersLive(db: db, onReorder: () => add(menu[0]));
     } else {
-      page = Profile(onDriver: () => setState(() => driver = true));
+      page = Profile(
+        onDriver: () => setState(() => driver = true),
+        user: widget.user,
+        onLogout: widget.onLogout,
+      );
     }
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -153,19 +378,18 @@ class _ShellState extends State<Shell> {
 class Home extends StatelessWidget {
   final int cart;
   final ValueChanged<Item> onAdd;
-  final VoidCallback onCart, onDriver;
+  final VoidCallback onCart;
   const Home({
     super.key,
     required this.cart,
     required this.onAdd,
     required this.onCart,
-    required this.onDriver,
   });
   @override
   Widget build(BuildContext context) => CustomScrollView(
     slivers: [
       SliverToBoxAdapter(
-        child: Header(cart: cart, onCart: onCart, onDriver: onDriver),
+        child: Header(cart: cart, onCart: onCart),
       ),
       SliverToBoxAdapter(
         child: Padding(
@@ -322,13 +546,8 @@ class Home extends StatelessWidget {
 
 class Header extends StatelessWidget {
   final int cart;
-  final VoidCallback onCart, onDriver;
-  const Header({
-    super.key,
-    required this.cart,
-    required this.onCart,
-    required this.onDriver,
-  });
+  final VoidCallback onCart;
+  const Header({super.key, required this.cart, required this.onCart});
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.fromLTRB(20, 16, 20, 14),
@@ -363,10 +582,6 @@ class Header extends StatelessWidget {
               ),
             ],
           ),
-        ),
-        IconButton(
-          onPressed: onDriver,
-          icon: const Icon(Icons.local_shipping_outlined),
         ),
         Stack(
           clipBehavior: Clip.none,
@@ -833,12 +1048,19 @@ class TitleBlock extends StatelessWidget {
 
 class Profile extends StatelessWidget {
   final VoidCallback onDriver;
-  const Profile({super.key, required this.onDriver});
+  final SessionUser user;
+  final VoidCallback onLogout;
+  const Profile({
+    super.key,
+    required this.onDriver,
+    required this.user,
+    required this.onLogout,
+  });
   @override
   Widget build(BuildContext context) => ListView(
     padding: const EdgeInsets.all(20),
     children: [
-      const TitleBlock('حسابي', 'إدارة الحساب والمحفظة'),
+      TitleBlock('حسابي', 'إدارة الحساب والمحفظة • ${user.roleLabel}'),
       const SizedBox(height: 18),
       Container(
         padding: const EdgeInsets.all(18),
@@ -846,7 +1068,7 @@ class Profile extends StatelessWidget {
           color: C.dark,
           borderRadius: BorderRadius.circular(21),
         ),
-        child: const Row(
+        child: Row(
           children: [
             CircleAvatar(
               radius: 28,
@@ -855,7 +1077,7 @@ class Profile extends StatelessWidget {
             ),
             SizedBox(width: 14),
             Text(
-              'فتحي بوعلام\nزبون • عضو منذ 2026',
+              'فتحي بوعلام\n${user.roleLabel} • حساب تجريبي',
               style: TextStyle(
                 color: Colors.white,
                 height: 1.6,
@@ -883,6 +1105,7 @@ class Profile extends StatelessWidget {
         ),
       ),
       const ActionTile(Icons.settings_outlined, 'الإعدادات', ''),
+      ActionTile(Icons.logout, 'تسجيل الخروج', 'خروج آمن', onTap: onLogout),
     ],
   );
 }
@@ -1296,4 +1519,197 @@ class _DriverOrder extends StatelessWidget {
       ),
     );
   }
+}
+
+class PartnerPortal extends StatelessWidget {
+  final UserRole role;
+  final VoidCallback onLogout;
+  const PartnerPortal({super.key, required this.role, required this.onLogout});
+
+  String get title => switch (role) {
+    UserRole.restaurant => 'لوحة المطعم',
+    UserRole.supplier => 'لوحة المورد',
+    UserRole.admin => 'لوحة المدير العام',
+    _ => 'لوحة الشريك',
+  };
+
+  String get subtitle => switch (role) {
+    UserRole.restaurant => 'تابع الأطباق والطلبات وأرباحك',
+    UserRole.supplier => 'إدارة التوريد والفواتير والطلبات',
+    UserRole.admin => 'مراقبة العمليات والخزينة والتسويات',
+    _ => 'مركز العمليات',
+  };
+
+  @override
+  Widget build(BuildContext context) => ListView(
+    padding: const EdgeInsets.all(20),
+    children: [
+      Row(
+        children: [
+          Expanded(child: TitleBlock(title, subtitle)),
+          IconButton(
+            onPressed: onLogout,
+            tooltip: 'تسجيل الخروج',
+            icon: const Icon(Icons.logout, color: C.orange),
+          ),
+        ],
+      ),
+      const SizedBox(height: 18),
+      Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: C.dark,
+          borderRadius: BorderRadius.circular(22),
+        ),
+        child: Row(
+          children: [
+            const CircleAvatar(
+              radius: 25,
+              backgroundColor: C.orange,
+              child: Icon(Icons.storefront, color: Colors.white),
+            ),
+            const SizedBox(width: 14),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  role == UserRole.admin ? 'حساب الإدارة' : 'حساب الشريك',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 17,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  role == UserRole.admin ? 'صلاحيات كاملة' : 'متصل الآن',
+                  style: const TextStyle(color: Colors.white60, fontSize: 12),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 16),
+      Row(
+        children: [
+          Expanded(
+            child: MetricCard(
+              label: role == UserRole.admin ? 'إجمالي العمليات' : 'طلبات اليوم',
+              value: role == UserRole.admin ? '24' : '8',
+              icon: Icons.receipt_long_outlined,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: MetricCard(
+              label: 'الرصيد المتاح',
+              value: role == UserRole.admin ? '12,480 دج' : '4,260 دج',
+              icon: Icons.account_balance_wallet_outlined,
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 20),
+      const Text(
+        'الطلبات الأخيرة',
+        style: TextStyle(
+          fontSize: 19,
+          fontWeight: FontWeight.w900,
+          color: C.text,
+        ),
+      ),
+      const SizedBox(height: 10),
+      ...const [
+        PartnerOrderCard(
+          code: '#TJ-104',
+          status: 'قيد التحضير',
+          total: '1,300 دج',
+        ),
+        PartnerOrderCard(
+          code: '#TJ-103',
+          status: 'تم التسليم',
+          total: '850 دج',
+        ),
+      ],
+      const SizedBox(height: 18),
+      ActionTile(
+        Icons.account_balance_wallet_outlined,
+        role == UserRole.admin ? 'الخزينة المركزية' : 'المحفظة والتسويات',
+        role == UserRole.admin ? '12,480 دج' : 'طلب سحب',
+      ),
+      ActionTile(
+        Icons.inventory_2_outlined,
+        role == UserRole.supplier ? 'الفواتير والمشتريات' : 'إدارة الأطباق',
+        'فتح',
+      ),
+    ],
+  );
+}
+
+class MetricCard extends StatelessWidget {
+  final String label, value;
+  final IconData icon;
+  const MetricCard({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(15),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: const Color(0xffece7e2)),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: C.orange),
+        const SizedBox(height: 10),
+        Text(label, style: const TextStyle(color: C.muted, fontSize: 11)),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: const TextStyle(
+            fontWeight: FontWeight.w900,
+            fontSize: 18,
+            color: C.text,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class PartnerOrderCard extends StatelessWidget {
+  final String code, status, total;
+  const PartnerOrderCard({
+    super.key,
+    required this.code,
+    required this.status,
+    required this.total,
+  });
+  @override
+  Widget build(BuildContext context) => Card(
+    elevation: 0,
+    margin: const EdgeInsets.only(bottom: 10),
+    child: ListTile(
+      leading: const CircleAvatar(backgroundColor: C.pale, child: Text('🍲')),
+      title: Text(code, style: const TextStyle(fontWeight: FontWeight.bold)),
+      subtitle: Text(
+        status,
+        style: TextStyle(
+          color: status == 'تم التسليم' ? C.green : C.orange,
+          fontSize: 12,
+        ),
+      ),
+      trailing: Text(
+        total,
+        style: const TextStyle(fontWeight: FontWeight.w800),
+      ),
+    ),
+  );
 }
