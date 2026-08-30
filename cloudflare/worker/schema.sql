@@ -1,0 +1,10 @@
+PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, full_name TEXT NOT NULL, role TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, owner_id TEXT REFERENCES users(id), name TEXT NOT NULL, description TEXT, retail_price INTEGER NOT NULL, wholesale_price INTEGER NOT NULL, emoji TEXT NOT NULL DEFAULT '🍽️', active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, code TEXT UNIQUE NOT NULL, customer_id TEXT NOT NULL REFERENCES users(id), driver_id TEXT REFERENCES users(id), status TEXT NOT NULL DEFAULT 'draft', food_total INTEGER NOT NULL, delivery_fee INTEGER NOT NULL DEFAULT 200, total INTEGER GENERATED ALWAYS AS (food_total + delivery_fee) STORED, phone TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS order_items (id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE, product_id TEXT NOT NULL REFERENCES products(id), quantity INTEGER NOT NULL, retail_unit_price INTEGER NOT NULL, wholesale_unit_price INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS wallet_entries (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), order_id TEXT REFERENCES orders(id), entry_type TEXT NOT NULL, amount INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE UNIQUE INDEX IF NOT EXISTS wallet_once ON wallet_entries(order_id, owner_id, entry_type);
+CREATE INDEX IF NOT EXISTS orders_customer_idx ON orders(customer_id, created_at);
+CREATE INDEX IF NOT EXISTS orders_driver_idx ON orders(driver_id, status, created_at);

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'cloudflare_backend.dart';
 import 'supabase_backend.dart';
 
 /// Central data source used by the prototype. Replace the in-memory adapter
@@ -47,9 +48,56 @@ class AppDatabase extends ChangeNotifier {
   late final List<Map<String, dynamic>> orders;
   late final List<Map<String, dynamic>> walletEntries;
 
-  bool get isRemote => SupabaseBackend.configured;
+  bool get isRemote => CloudflareBackend.configured || SupabaseBackend.configured;
 
   Future<void> refreshFromRemote() async {
+    if (CloudflareBackend.configured) {
+      try {
+        final productPayload = await CloudflareBackend.get('/api/products') as Map<String, dynamic>;
+        final productRows = (productPayload['results'] as List<dynamic>? ?? const []);
+        if (productRows.isNotEmpty) {
+          products
+            ..clear()
+            ..addAll(productRows.map((row) => {
+              'id': row['id'],
+              'title': row['name'],
+              'price': row['price'],
+              'emoji': row['emoji'] ?? '🍽️',
+            }));
+        }
+        final orderPayload = await CloudflareBackend.get('/api/orders') as Map<String, dynamic>;
+        final orderRows = (orderPayload['results'] as List<dynamic>? ?? const []);
+        orders
+          ..clear()
+          ..addAll(orderRows.map((row) => {
+            'dbId': row['id'],
+            'id': row['code'],
+            'status': row['status'],
+            'foodTotal': row['food_total'],
+            'deliveryFee': row['delivery_fee'],
+            'total': row['total'],
+            'customer': row['customer_name'] ?? 'زبون وصلة',
+          }));
+        try {
+          final walletPayload = await CloudflareBackend.get('/api/wallet') as Map<String, dynamic>;
+          final walletRows = (walletPayload['results'] as List<dynamic>? ?? const []);
+          walletEntries
+            ..clear()
+            ..addAll(walletRows.map((row) => {
+              'orderId': row['order_id'],
+              'type': row['entry_type'],
+              'amount': row['amount'],
+              'createdAt': DateTime.tryParse(row['created_at'] as String? ?? ''),
+            }));
+        } catch (_) {
+          // Wallet is only available after signing in.
+        }
+        notifyListeners();
+      } catch (_) {
+        // Keep the seeded offline data if the remote service is unavailable.
+      }
+      return;
+    }
     final client = SupabaseBackend.client;
     if (client == null) return;
     try {
@@ -122,6 +170,7 @@ class AppDatabase extends ChangeNotifier {
     required int foodTotal,
     required int itemCount,
     int deliveryFee = 200,
+    Map<String, int>? itemLines,
   }) {
     final id = 'TJ-${104 + orders.length}';
     orders.insert(0, {
@@ -134,7 +183,31 @@ class AppDatabase extends ChangeNotifier {
       'customer': 'فتحي',
     });
     notifyListeners();
-    unawaited(_createRemoteOrder(id, foodTotal, itemCount, deliveryFee));
+    if (CloudflareBackend.configured) {
+      unawaited(_createCloudflareOrder(foodTotal, itemCount, itemLines));
+    } else {
+      unawaited(_createRemoteOrder(id, foodTotal, itemCount, deliveryFee));
+    }
+  }
+
+  Future<void> _createCloudflareOrder(
+    int foodTotal,
+    int itemCount,
+    Map<String, int>? itemLines,
+  ) async {
+    try {
+      await CloudflareBackend.post('/api/orders', {
+        'items': (itemLines == null || itemLines.isEmpty)
+            ? [
+                {'productId': 'tajine-olive', 'quantity': itemCount},
+              ]
+            : itemLines.entries
+                  .map((entry) => {'productId': entry.key, 'quantity': entry.value})
+                  .toList(),
+        'phone': '0550123456',
+      });
+      await refreshFromRemote();
+    } catch (_) {}
   }
 
   Future<void> _createRemoteOrder(
@@ -223,6 +296,13 @@ class AppDatabase extends ChangeNotifier {
     String status, {
     bool assignDriver = false,
   }) async {
+    if (CloudflareBackend.configured) {
+      try {
+        await CloudflareBackend.post('/api/orders/${order['id']}/status', {'status': status});
+        await refreshFromRemote();
+      } catch (_) {}
+      return;
+    }
     final client = SupabaseBackend.client;
     if (client == null) return;
     try {

@@ -98,6 +98,9 @@ class _LoginScreenState extends State<LoginScreen> {
     });
     final user = await widget.auth.login(email.text, password.text);
     if (!mounted) return;
+    if (user != null) {
+      await AppDatabase.instance.refreshFromRemote();
+    }
     setState(() => loading = false);
     if (user == null) {
       setState(
@@ -302,6 +305,7 @@ class _ShellState extends State<Shell> {
   var index = 0;
   var cart = 0;
   var total = 0;
+  final Map<String, int> cartItems = {};
   var driver = false;
 
   @override
@@ -311,9 +315,15 @@ class _ShellState extends State<Shell> {
   }
 
   void add(Item item) {
+    final product = db.products.cast<Map<String, dynamic>>().firstWhere(
+      (candidate) => candidate['title'] == item.title,
+      orElse: () => {'id': 'tajine-olive'},
+    );
     setState(() {
       cart++;
       total += item.price;
+      final productId = product['id'] as String;
+      cartItems[productId] = (cartItems[productId] ?? 0) + 1;
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -398,12 +408,14 @@ class _ShellState extends State<Shell> {
           db.createOrder(
             foodTotal: total == 0 ? 800 : total,
             itemCount: cart == 0 ? 1 : cart,
+            itemLines: Map<String, int>.from(cartItems),
           );
           Navigator.pop(context);
           setState(() {
             index = 2;
             cart = 0;
             total = 0;
+            cartItems.clear();
           });
         },
       ),

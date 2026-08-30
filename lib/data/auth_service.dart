@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'cloudflare_backend.dart';
 import 'supabase_backend.dart';
 
 enum UserRole { client, driver, restaurant, supplier, admin }
@@ -25,6 +26,21 @@ class AuthService extends ChangeNotifier {
   SessionUser? currentUser;
 
   Future<SessionUser?> login(String email, String password) async {
+    if (CloudflareBackend.configured) {
+      try {
+        final user = await CloudflareBackend.login(email, password);
+        if (user == null) return null;
+        currentUser = SessionUser(
+          user['id'] as String? ?? 'cloudflare-user',
+          user['name'] as String? ?? user['email'] as String? ?? email,
+          _parseRole(user['role'] as String? ?? 'client'),
+        );
+        notifyListeners();
+        return currentUser;
+      } catch (_) {
+        return null;
+      }
+    }
     if (SupabaseBackend.configured) {
       try {
         final response = await SupabaseBackend.client!.auth.signInWithPassword(
@@ -70,6 +86,9 @@ class AuthService extends ChangeNotifier {
   }
 
   void logout() {
+    if (CloudflareBackend.configured) {
+      CloudflareBackend.logout();
+    }
     if (SupabaseBackend.configured) {
       SupabaseBackend.client!.auth.signOut();
     }
