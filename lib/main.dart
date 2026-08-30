@@ -1,8 +1,18 @@
 import 'package:flutter/material.dart';
 import 'data/app_database.dart';
 import 'data/auth_service.dart';
+import 'data/supabase_backend.dart';
 
-void main() => runApp(const App());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await SupabaseBackend.initialize();
+  } catch (_) {
+    // Keep the demo adapter usable when production keys are not configured yet.
+  }
+  await AppDatabase.instance.refreshFromRemote();
+  runApp(const App());
+}
 
 class C {
   static const bg = Color(0xfff7fafb);
@@ -72,6 +82,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final email = TextEditingController();
   final password = TextEditingController();
   String? error;
+  bool loading = false;
 
   @override
   void dispose() {
@@ -80,8 +91,14 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void submit() {
-    final user = widget.auth.login(email.text, password.text);
+  Future<void> submit() async {
+    setState(() {
+      loading = true;
+      error = null;
+    });
+    final user = await widget.auth.login(email.text, password.text);
+    if (!mounted) return;
+    setState(() => loading = false);
     if (user == null) {
       setState(
         () =>
@@ -204,7 +221,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           width: double.infinity,
                           height: 52,
                           child: ElevatedButton(
-                            onPressed: submit,
+                            onPressed: loading ? null : submit,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: C.orange,
                               foregroundColor: Colors.white,
@@ -212,13 +229,22 @@ class _LoginScreenState extends State<LoginScreen> {
                                 borderRadius: BorderRadius.circular(15),
                               ),
                             ),
-                            child: const Text(
-                              'دخول إلى التطبيق',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                              ),
-                            ),
+                            child: loading
+                                ? const SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Text(
+                                    'دخول إلى التطبيق',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                    ),
+                                  ),
                           ),
                         ),
                       ],
@@ -277,6 +303,12 @@ class _ShellState extends State<Shell> {
   var cart = 0;
   var total = 0;
   var driver = false;
+
+  @override
+  void initState() {
+    super.initState();
+    db.refreshFromRemote();
+  }
 
   void add(Item item) {
     setState(() {
