@@ -33,6 +33,11 @@ migrate_working_dir/
 /build/
 /coverage/
 node_modules/
+**/.wrangler-dry-run/
+**/.wrangler-test-*/
+**/.wrangler/
+**/.wrangler-*/
+cloudflare/worker/backups/
 
 # Symbolication related
 app.*.symbols
@@ -44,3 +49,8 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/build/
+
+# Local preview builds
+*.apk
+test/failures/

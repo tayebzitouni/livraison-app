@@ -1,0 +1,16 @@
+ALTER TABLE users ADD COLUMN business_name TEXT;
+ALTER TABLE users ADD COLUMN phone TEXT;
+ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE products ADD COLUMN kind TEXT NOT NULL DEFAULT 'meal' CHECK(kind IN ('meal','grocery'));
+ALTER TABLE products ADD COLUMN category TEXT NOT NULL DEFAULT 'Autre';
+ALTER TABLE orders ADD COLUMN merchant_id TEXT REFERENCES users(id);
+ALTER TABLE orders ADD COLUMN courier_id TEXT REFERENCES users(id);
+ALTER TABLE orders ADD COLUMN address TEXT NOT NULL DEFAULT '';
+ALTER TABLE orders ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'cash';
+ALTER TABLE orders ADD COLUMN payment_status TEXT NOT NULL DEFAULT 'pending' CHECK(payment_status IN ('pending','paid','refunded'));
+UPDATE users SET role='courier' WHERE role='driver';
+UPDATE users SET role='supermarket' WHERE role='supplier';
+UPDATE orders SET merchant_id=(SELECT p.owner_id FROM order_items oi JOIN products p ON p.id=oi.product_id WHERE oi.order_id=orders.id LIMIT 1),courier_id=driver_id;
+UPDATE orders SET status=CASE status WHEN 'draft' THEN 'placed' WHEN 'confirmed' THEN 'courier_validated' ELSE status END;
+CREATE INDEX IF NOT EXISTS orders_merchant_idx ON orders(merchant_id,status,created_at);
+CREATE INDEX IF NOT EXISTS orders_courier_idx ON orders(courier_id,status,created_at);

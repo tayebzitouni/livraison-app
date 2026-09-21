@@ -1,4 +1,4 @@
-package com.example.livraison_app
+package dz.wasla.livraison
 
 import io.flutter.embedding.android.FlutterActivity
 

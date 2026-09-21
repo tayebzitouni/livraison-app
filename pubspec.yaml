@@ -1,5 +1,5 @@
 name: livraison_app
-description: "A new Flutter project."
+description: "Wasla multi-role restaurant, grocery, and delivery marketplace."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 1.4.7+12
 
 environment:
   sdk: ^3.12.2
@@ -35,7 +35,14 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   http: ^1.5.0
-  supabase_flutter: ^2.17.2
+  image_picker: 1.2.0
+  video_player: 2.10.0
+  shared_preferences: ^2.5.5
+  pdf: ^3.13.0
+  printing: ^5.15.0
+  url_launcher: ^6.3.2
+  flutter_localizations:
+    sdk: flutter
 
 dev_dependencies:
   flutter_test:
@@ -48,6 +55,12 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
+# Pin the Android implementation to Media3 1.5.1, which is compatible with
+# the current Android toolchain while preserving inline video playback.
+dependency_overrides:
+  video_player_android:
+    path: packages/video_player_android
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
@@ -58,6 +71,11 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+  assets:
+    - assets/marketplace_hero.png
+    - assets/products/
+    - assets/fonts/NotoSansArabic.ttf
+    - assets/fonts/NotoSans.ttf
 
   # To add assets to your application, add an assets section, like this:
   # assets:

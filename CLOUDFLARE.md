@@ -1,37 +1,27 @@
-# Cloudflare production backend
+# Backend Cloudflare de production
 
-The app includes a Cloudflare Workers API backed by a Cloudflare D1 database.
+API : `https://livraison-api.story-trends-dz.workers.dev`
 
-## Live API
+Le Worker utilise D1 pour les données et R2 pour les images/vidéos. Les commerçants proposent un prix de gros ; l'administrateur fixe le prix client et approuve le produit. Il règle aussi le pourcentage de commission et les frais de livraison. Chaque commande conserve les tarifs appliqués au moment de sa création. La comptabilisation des portefeuilles a lieu après confirmation de la réception par le client.
 
-`https://livraison-api.story-trends-dz.workers.dev`
+## Déploiement
 
-## Demo accounts
-
-Use the same value for email and password:
-
-- `1 / 1` — client
-- `2 / 2` — driver
-- `3 / 3` — restaurant
-- `4 / 4` — supplier
-- `5 / 5` — admin
-
-## Run Flutter against production
+Depuis `cloudflare/worker` :
 
 ```bash
-flutter pub get
-flutter run --dart-define=API_BASE_URL=https://livraison-api.story-trends-dz.workers.dev
-```
-
-The app keeps the offline demo adapter when `API_BASE_URL` is omitted. Supabase remains an optional alternative through its existing compile-time defines.
-
-## Redeploy the API
-
-```bash
-npx wrangler d1 execute livraison-prod --remote --file=cloudflare/worker/schema.sql
-npx wrangler d1 execute livraison-prod --remote --file=cloudflare/worker/seed.sql
-cd cloudflare/worker
+npm install
+npx wrangler d1 migrations apply livraison-prod --remote
+npx wrangler d1 execute livraison-prod --remote --file=seed.sql
+npx wrangler secret put ADMIN_SETUP_TOKEN
 npx wrangler deploy
 ```
 
-The API provides role-based login, products, order lifecycle (`draft` → `confirmed` → `picked_up` → `delivered`), and an idempotent wallet ledger for restaurant, admin, and driver balances.
+Puis construire l'application connectée :
+
+```bash
+flutter build apk --release --dart-define=API_BASE_URL=https://livraison-api.story-trends-dz.workers.dev
+```
+
+Les comptes de démonstration sont listés dans `README.md`.
+
+Pour créer le premier compte administrateur sur le backend, choisir **Créer un compte → Administrateur** dans l'application, saisir un mot de passe d'au moins 12 caractères et le code enregistré dans `ADMIN_SETUP_TOKEN`. La création est désactivée dès qu'un administrateur existe. Les bases neuves doivent recevoir `schema.sql` avant `seed.sql` ; les bases existantes reçoivent la migration `0005_admin_pricing.sql`.
