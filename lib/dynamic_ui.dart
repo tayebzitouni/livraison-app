@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart' hide Text;
@@ -85,20 +86,34 @@ class ProductMedia extends StatelessWidget {
               ),
             );
     } else {
-      child = Image.network(
-        media,
-        fit: fit,
-        width: double.infinity,
-        height: double.infinity,
-        errorBuilder: (_, _, _) => Image.asset(
-          _fallbackMedia(product),
-          fit: fit,
-          width: double.infinity,
-          height: double.infinity,
-        ),
-        loadingBuilder: (context, image, progress) => progress == null
-            ? image
-            : const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      child = LayoutBuilder(
+        builder: (context, constraints) {
+          final pixelRatio = MediaQuery.devicePixelRatioOf(context);
+          final logicalWidth = constraints.hasBoundedWidth
+              ? constraints.maxWidth
+              : MediaQuery.sizeOf(context).width;
+          final cacheWidth = (logicalWidth * pixelRatio).round().clamp(1, 1600);
+          return Image.network(
+            media,
+            fit: fit,
+            width: double.infinity,
+            height: double.infinity,
+            cacheWidth: cacheWidth,
+            filterQuality: FilterQuality.medium,
+            gaplessPlayback: true,
+            errorBuilder: (_, _, _) => Image.asset(
+              _fallbackMedia(product),
+              fit: fit,
+              width: double.infinity,
+              height: double.infinity,
+            ),
+            loadingBuilder: (context, image, progress) => progress == null
+                ? image
+                : const Center(
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+          );
+        },
       );
     }
     return ClipRRect(
@@ -292,6 +307,16 @@ class _ProductDetailsState extends State<_ProductDetails> {
                         fontWeight: FontWeight.w800,
                       ),
                     ),
+                    if (!product.available) ...[
+                      const SizedBox(height: 12),
+                      FormMessage(
+                        store.tr(
+                          'Produit épuisé · commande indisponible',
+                          'المنتج نفد · الطلب غير متاح',
+                        ),
+                        error: false,
+                      ),
+                    ],
                     const SizedBox(height: 16),
                     Text(
                       product.description,
@@ -387,6 +412,7 @@ class _ProductDetailsState extends State<_ProductDetails> {
                   TextField(
                     key: const Key('product-note-field'),
                     controller: note,
+                    enabled: product.available,
                     maxLines: 2,
                     keyboardType: TextInputType.multiline,
                     textInputAction: TextInputAction.newline,
@@ -424,12 +450,22 @@ class _ProductDetailsState extends State<_ProductDetails> {
                         ),
                       ),
                       FilledButton.icon(
-                        onPressed: () {
-                          store.addToCart(product, note: note.text);
-                          Navigator.pop(context);
-                        },
-                        icon: const Icon(Icons.shopping_bag_outlined),
-                        label: const Text('Ajouter au panier'),
+                        onPressed: !product.available
+                            ? null
+                            : () {
+                                store.addToCart(product, note: note.text);
+                                Navigator.pop(context);
+                              },
+                        icon: Icon(
+                          product.available
+                              ? Icons.shopping_bag_outlined
+                              : Icons.block_rounded,
+                        ),
+                        label: Text(
+                          product.available
+                              ? store.tr('Ajouter au panier', 'أضف إلى السلة')
+                              : store.tr('Épuisé', 'نفد المخزون'),
+                        ),
                       ),
                     ],
                   ),
@@ -479,6 +515,44 @@ class _Pill extends StatelessWidget {
   );
 }
 
+/// Inline feedback box, used inside sheets and dialogs where a SnackBar would
+/// be hidden behind the modal layer.
+class FormMessage extends StatelessWidget {
+  const FormMessage(this.text, {super.key, this.error = true});
+  final String text;
+  final bool error;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = error ? const Color(0xFFB42318) : _green;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: error ? const Color(0xFFFDECEA) : const Color(0xFFE4F0E9),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            error ? Icons.error_outline_rounded : Icons.check_circle_rounded,
+            color: color,
+            size: 20,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(color: color, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class PickedMedia {
   const PickedMedia({
     required this.bytes,
@@ -491,14 +565,53 @@ class PickedMedia {
   final ProductMediaType type;
 }
 
-Future<PickedMedia?> pickProductMedia({bool imagesOnly = false}) async {
+/// Outcome of choosing a photo or video: either a usable file or the reason
+/// it cannot be used.
+class MediaPick {
+  const MediaPick.ok(PickedMedia this.media) : error = null;
+  const MediaPick.fail(String this.error) : media = null;
+  final PickedMedia? media;
+  final String? error;
+}
+
+const _maxImageBytes = 8 * 1024 * 1024;
+const _maxVideoBytes = 25 * 1024 * 1024;
+
+/// Lets the user choose a photo (or video) from the gallery. Photos are
+/// resized and compressed so a modern phone picture always fits the upload
+/// limit. Returns `null` when the picker is dismissed.
+Future<MediaPick?> pickProductMedia(
+  MarketplaceStore store, {
+  bool imagesOnly = false,
+}) async {
   final picker = ImagePicker();
-  final file = imagesOnly
-      ? await picker.pickImage(source: ImageSource.gallery)
-      : await picker.pickMedia();
+  final XFile? file;
+  try {
+    file = imagesOnly
+        ? await picker.pickImage(
+            source: ImageSource.gallery,
+            maxWidth: 1600,
+            maxHeight: 1600,
+            imageQuality: 82,
+          )
+        : await picker.pickMedia(
+            maxWidth: 1600,
+            maxHeight: 1600,
+            imageQuality: 82,
+          );
+  } catch (_) {
+    return MediaPick.fail(
+      store.tr(
+        'Impossible d’ouvrir la galerie. Autorisez l’accès aux photos.',
+        'تعذر فتح المعرض. اسمح بالوصول إلى الصور.',
+      ),
+    );
+  }
   if (file == null) return null;
   final data = await file.readAsBytes();
-  if (data.isEmpty) return null;
+  if (data.isEmpty) {
+    return MediaPick.fail(store.tr('Ce fichier est vide.', 'هذا الملف فارغ.'));
+  }
   final dot = file.name.lastIndexOf('.');
   final extension = dot < 0 ? '' : file.name.substring(dot + 1).toLowerCase();
   final contentType = switch (extension) {
@@ -511,19 +624,40 @@ Future<PickedMedia?> pickProductMedia({bool imagesOnly = false}) async {
     'mov' => 'video/quicktime',
     _ => '',
   };
-  if (contentType.isEmpty) return null;
-  return PickedMedia(
-    bytes: data,
-    name: file.name,
-    contentType: contentType,
-    type: contentType.startsWith('video/')
-        ? ProductMediaType.video
-        : ProductMediaType.image,
+  if (contentType.isEmpty) {
+    return MediaPick.fail(
+      store.tr(
+        'Format non pris en charge. Choisissez une image JPG, PNG ou WebP, ou une vidéo MP4.',
+        'صيغة غير مدعومة. اختر صورة JPG أو PNG أو WebP أو فيديو MP4.',
+      ),
+    );
+  }
+  final video = contentType.startsWith('video/');
+  if (data.length > (video ? _maxVideoBytes : _maxImageBytes)) {
+    return MediaPick.fail(
+      store.tr(
+        video
+            ? 'Cette vidéo dépasse 25 Mo. Choisissez une vidéo plus courte.'
+            : 'Cette image dépasse 8 Mo. Choisissez-en une plus légère.',
+        video
+            ? 'هذا الفيديو يتجاوز 25 م.ب. اختر فيديو أقصر.'
+            : 'هذه الصورة تتجاوز 8 م.ب. اختر صورة أخف.',
+      ),
+    );
+  }
+  return MediaPick.ok(
+    PickedMedia(
+      bytes: data,
+      name: file.name,
+      contentType: contentType,
+      type: video ? ProductMediaType.video : ProductMediaType.image,
+    ),
   );
 }
 
 void showProductEditor(BuildContext context, MarketplaceStore store) {
-  showModalBottomSheet<void>(
+  final messenger = ScaffoldMessenger.of(context);
+  showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
@@ -532,7 +666,19 @@ void showProductEditor(BuildContext context, MarketplaceStore store) {
       heightFactor: .95,
       child: _ProductEditor(store: store),
     ),
-  );
+  ).then((published) {
+    if (published != true) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          store.tr(
+            'Envoyé pour validation. Il sera visible après l’accord de l’administrateur.',
+            'تم الإرسال للموافقة. سيظهر بعد موافقة المدير.',
+          ),
+        ),
+      ),
+    );
+  });
 }
 
 class _ProductEditor extends StatefulWidget {
@@ -551,7 +697,10 @@ class _ProductEditorState extends State<_ProductEditor> {
   final wholesale = TextEditingController();
   PickedMedia? media;
   String? category;
-  bool publishing = false;
+  bool publishing = false, submitted = false;
+  String? formError;
+
+  MarketplaceStore get store => widget.store;
 
   @override
   void dispose() {
@@ -573,57 +722,110 @@ class _ProductEditorState extends State<_ProductEditor> {
       .where((item) => item.isNotEmpty)
       .toList();
 
+  String? _required(TextEditingController c, {int min = 1}) =>
+      submitted && c.text.trim().length < min
+      ? store.tr('Champ obligatoire', 'حقل إلزامي')
+      : null;
+
+  String? get _priceError {
+    if (!submitted) return null;
+    final price = int.tryParse(wholesale.text.trim());
+    return price == null || price <= 0
+        ? store.tr('Indiquez un prix supérieur à 0', 'أدخل سعراً أكبر من 0')
+        : null;
+  }
+
+  Future<void> _pickMedia() async {
+    final pick = await pickProductMedia(store);
+    if (pick == null || !mounted) return;
+    setState(() {
+      if (pick.error != null) {
+        formError = pick.error;
+      } else {
+        media = pick.media;
+        formError = null;
+      }
+    });
+  }
+
+  /// Required: name, description, category and merchant price. Photo,
+  /// ingredients and allergens are optional.
   Future<void> submit() async {
-    final wholesalePrice = int.tryParse(wholesale.text);
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() {
+      submitted = true;
+      formError = null;
+    });
+    final wholesalePrice = int.tryParse(wholesale.text.trim());
     if (name.text.trim().isEmpty ||
-        description.text.trim().length < 10 ||
+        description.text.trim().length < 2 ||
         category == null ||
-        media == null ||
         wholesalePrice == null ||
         wholesalePrice <= 0) {
-      _message('Ajoutez le média et complétez tous les détails obligatoires.');
+      setState(
+        () => formError = store.tr(
+          'Complétez les champs obligatoires : nom, description, catégorie et votre prix de vente.',
+          'أكمل الحقول الإلزامية: الاسم والوصف والتصنيف وسعر البيع الخاص بك.',
+        ),
+      );
       return;
     }
     setState(() => publishing = true);
-    final mediaUrl = await widget.store.uploadMedia(
-      bytes: media!.bytes,
-      fileName: media!.name,
-      contentType: media!.contentType,
-    );
-    if (mediaUrl == null) {
-      if (mounted) setState(() => publishing = false);
-      return;
+    String? mediaUrl;
+    if (media != null) {
+      mediaUrl = await store.uploadMedia(
+        bytes: media!.bytes,
+        fileName: media!.name,
+        contentType: media!.contentType,
+      );
+      if (mediaUrl == null) {
+        if (mounted) {
+          setState(() {
+            publishing = false;
+            formError =
+                store.lastError ??
+                store.tr(
+                  'Le média n’a pas pu être envoyé. Retirez-le ou réessayez.',
+                  'تعذر رفع الملف. أزله أو أعد المحاولة.',
+                );
+          });
+        }
+        return;
+      }
     }
-    final ok = await widget.store.addProduct(
+    final ok = await store.addProduct(
       name: name.text.trim(),
       description: description.text.trim(),
       category: category!,
       wholesale: wholesalePrice,
       emoji: '🍽️',
       mediaUrl: mediaUrl,
-      mediaType: media!.type,
+      mediaType: media?.type ?? ProductMediaType.image,
       ingredients: split(ingredients),
       allergens: split(allergens),
     );
     if (!mounted) return;
     if (ok) {
-      Navigator.pop(context);
+      Navigator.pop(context, true);
     } else {
-      setState(() => publishing = false);
-      _message(widget.store.lastError ?? 'Publication impossible.');
+      setState(() {
+        publishing = false;
+        formError =
+            store.lastError ??
+            store.tr('Publication impossible.', 'تعذر النشر.');
+      });
     }
   }
 
-  void _message(String value) => ScaffoldMessenger.of(
-    context,
-  ).showSnackBar(SnackBar(content: Text(value)));
-
   @override
   Widget build(BuildContext context) {
-    final kind = widget.store.currentUser!.role == UserRole.supermarket
+    final kind = store.currentUser!.role == UserRole.supermarket
         ? ProductKind.grocery
         : ProductKind.meal;
-    final categories = widget.store.categoriesFor(kind);
+    final categories = store.categoriesFor(kind);
+    if (category != null && !categories.any((c) => c.name == category)) {
+      category = null;
+    }
     category ??= categories.isEmpty ? null : categories.first.name;
     return Scaffold(
       backgroundColor: _surface,
@@ -640,14 +842,7 @@ class _ProductEditorState extends State<_ProductEditor> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             GestureDetector(
-              onTap: publishing
-                  ? null
-                  : () async {
-                      final picked = await pickProductMedia();
-                      if (picked != null && mounted) {
-                        setState(() => media = picked);
-                      }
-                    },
+              onTap: publishing ? null : _pickMedia,
               child: Container(
                 height: 190,
                 width: double.infinity,
@@ -687,55 +882,89 @@ class _ProductEditorState extends State<_ProductEditor> {
                       ),
               ),
             ),
-            const SizedBox(height: 20),
+            if (media != null)
+              Align(
+                alignment: AlignmentDirectional.centerEnd,
+                child: TextButton.icon(
+                  onPressed: publishing
+                      ? null
+                      : () => setState(() => media = null),
+                  icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                  label: Text(store.tr('Retirer le média', 'إزالة الملف')),
+                ),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  store.tr(
+                    'Photo ou vidéo facultative.',
+                    'الصورة أو الفيديو اختياري.',
+                  ),
+                  style: const TextStyle(color: _muted, fontSize: 12.5),
+                ),
+              ),
+            const SizedBox(height: 14),
             TextField(
+              key: const Key('product-name'),
               controller: name,
+              onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
-                labelText: widget.store.tr('Nom *', 'الاسم *'),
+                labelText: store.tr('Nom *', 'الاسم *'),
+                errorText: _required(name),
               ),
             ),
             const SizedBox(height: 12),
             TextField(
+              key: const Key('product-description'),
               controller: description,
               maxLines: 3,
+              onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
-                labelText: widget.store.tr(
-                  'Description complète *',
-                  'الوصف الكامل *',
-                ),
-                hintText: widget.store.tr(
+                labelText: store.tr('Description complète *', 'الوصف الكامل *'),
+                hintText: store.tr(
                   'Saveurs, texture, accompagnement, portion…',
                   'النكهة والمكونات والحصة…',
                 ),
                 alignLabelWithHint: true,
+                errorText: _required(description, min: 2),
               ),
             ),
             const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              initialValue: category,
-              isExpanded: true,
-              decoration: InputDecoration(
-                labelText: widget.store.tr(
-                  'Catégorie dynamique *',
-                  'التصنيف *',
+            if (categories.isEmpty)
+              FormMessage(
+                store.tr(
+                  'Aucune catégorie n’est disponible pour le moment. Demandez à l’administrateur d’en ajouter.',
+                  'لا توجد تصنيفات حالياً. اطلب من المدير إضافة تصنيف.',
                 ),
+              )
+            else
+              DropdownButtonFormField<String>(
+                key: const Key('product-category'),
+                initialValue: category,
+                isExpanded: true,
+                decoration: InputDecoration(
+                  labelText: store.tr('Catégorie *', 'التصنيف *'),
+                ),
+                items: categories
+                    .map(
+                      (item) => DropdownMenuItem(
+                        value: item.name,
+                        child: Text(item.name),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) => setState(() => category = value),
               ),
-              items: categories
-                  .map(
-                    (item) => DropdownMenuItem(
-                      value: item.name,
-                      child: Text(item.name),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) => setState(() => category = value),
-            ),
             const SizedBox(height: 12),
             TextField(
               controller: ingredients,
               decoration: InputDecoration(
-                labelText: widget.store.tr('Ingrédients', 'المكونات'),
-                hintText: widget.store.tr(
+                labelText: store.tr(
+                  'Ingrédients (facultatif)',
+                  'المكونات (اختياري)',
+                ),
+                hintText: store.tr(
                   'Poulet, quinoa, tomates…',
                   'دجاج، كينوا، طماطم…',
                 ),
@@ -745,8 +974,11 @@ class _ProductEditorState extends State<_ProductEditor> {
             TextField(
               controller: allergens,
               decoration: InputDecoration(
-                labelText: widget.store.tr('Allergènes', 'مسببات الحساسية'),
-                hintText: widget.store.tr(
+                labelText: store.tr(
+                  'Allergènes (facultatif)',
+                  'مسببات الحساسية (اختياري)',
+                ),
+                hintText: store.tr(
                   'Gluten, lait, fruits à coque…',
                   'جلوتين، حليب، مكسرات…',
                 ),
@@ -754,22 +986,73 @@ class _ProductEditorState extends State<_ProductEditor> {
             ),
             const SizedBox(height: 12),
             TextField(
+              key: const Key('product-wholesale'),
               controller: wholesale,
               keyboardType: TextInputType.number,
+              onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
-                labelText: widget.store.tr('Prix de gros *', 'سعر الجملة *'),
-                suffixText: 'DA',
+                labelText: store.tr(
+                  'Votre prix de vente *',
+                  'سعر البيع الخاص بك *',
+                ),
+                suffixText: store.tr('DA', 'دج'),
+                errorText: _priceError,
               ),
             ),
             const SizedBox(height: 8),
-            const Text(
-              'Le prix client sera fixé par l’administrateur après validation.',
+            Builder(
+              builder: (_) {
+                final merchantPrice = int.tryParse(wholesale.text.trim());
+                final supermarket =
+                    store.currentUser?.role == UserRole.supermarket;
+                if (merchantPrice == null || merchantPrice <= 0) {
+                  return Text(
+                    store.tr(
+                      supermarket
+                          ? 'Indiquez votre prix. L’administrateur fixera ensuite directement le prix client, sans pourcentage.'
+                          : 'La commission Wasla sera ajoutée automatiquement au prix client.',
+                      supermarket
+                          ? 'أدخل سعرك. سيحدد المدير بعد ذلك سعر الزبون مباشرة، بدون نسبة.'
+                          : 'تُضاف عمولة وصلة تلقائياً إلى سعر الزبون.',
+                    ),
+                  );
+                }
+                if (supermarket) {
+                  return FormMessage(
+                    store.tr(
+                      'Vous recevez ${_price(merchantPrice)}. L’administrateur choisit librement le prix de vente au client, sans calcul en pourcentage.',
+                      'تحصل على ${_price(merchantPrice)}. يختار المدير سعر البيع للزبون مباشرة، بدون حساب النسبة.',
+                    ),
+                    error: false,
+                  );
+                }
+                final commission = commissionForMerchantPrice(
+                  merchantPrice,
+                  store.commissionPercent,
+                );
+                final customerPrice = customerPriceFor(
+                  merchantPrice,
+                  store.commissionPercent,
+                );
+                return FormMessage(
+                  store.tr(
+                    'Vous recevez ${_price(merchantPrice)} + commission Wasla ${_price(commission)} (${store.commissionPercent} %) = prix client ${_price(customerPrice)}.',
+                    'تحصل على ${_price(merchantPrice)} + عمولة وصلة ${_price(commission)} (${store.commissionPercent}٪) = سعر الزبون ${_price(customerPrice)}.',
+                  ),
+                  error: false,
+                );
+              },
             ),
+            if (formError != null) ...[
+              const SizedBox(height: 14),
+              FormMessage(formError!),
+            ],
             const SizedBox(height: 22),
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
-                onPressed: publishing ? null : submit,
+                key: const Key('product-submit'),
+                onPressed: publishing || categories.isEmpty ? null : submit,
                 icon: publishing
                     ? const SizedBox(
                         width: 20,
@@ -893,9 +1176,17 @@ class _ProfileEditorState extends State<_ProfileEditor> {
               onTap: saving
                   ? null
                   : () async {
-                      final picked = await pickProductMedia(imagesOnly: true);
-                      if (picked != null && mounted) {
-                        setState(() => avatar = picked);
+                      final pick = await pickProductMedia(
+                        widget.store,
+                        imagesOnly: true,
+                      );
+                      if (pick == null || !context.mounted) return;
+                      if (pick.error != null) {
+                        ScaffoldMessenger.of(
+                          context,
+                        ).showSnackBar(SnackBar(content: Text(pick.error!)));
+                      } else {
+                        setState(() => avatar = pick.media);
                       }
                     },
               child: Stack(
@@ -1004,7 +1295,34 @@ class _ProfileEditorState extends State<_ProfileEditor> {
   }
 }
 
-void showNotifications(BuildContext context, MarketplaceStore store) {
+/// Supplies notification widgets with the app-level order navigation action.
+///
+/// Keeping this in the widget tree means notification buttons in every role
+/// (including the profile screen) open the same order-details page.
+class NotificationNavigationScope extends InheritedWidget {
+  const NotificationNavigationScope({
+    super.key,
+    required this.openOrder,
+    required super.child,
+  });
+
+  final ValueChanged<AppNotification> openOrder;
+
+  static ValueChanged<AppNotification>? maybeOf(BuildContext context) => context
+      .dependOnInheritedWidgetOfExactType<NotificationNavigationScope>()
+      ?.openOrder;
+
+  @override
+  bool updateShouldNotify(NotificationNavigationScope oldWidget) =>
+      openOrder != oldWidget.openOrder;
+}
+
+void showNotifications(
+  BuildContext context,
+  MarketplaceStore store, {
+  ValueChanged<AppNotification>? onOpenOrder,
+}) {
+  final openOrder = onOpenOrder ?? NotificationNavigationScope.maybeOf(context);
   showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -1012,14 +1330,24 @@ void showNotifications(BuildContext context, MarketplaceStore store) {
     backgroundColor: _surface,
     builder: (_) => FractionallySizedBox(
       heightFactor: .86,
-      child: _NotificationsView(store: store),
+      child: _NotificationsView(store: store, onOpenOrder: openOrder),
     ),
   );
 }
 
 class _NotificationsView extends StatelessWidget {
-  const _NotificationsView({required this.store});
+  const _NotificationsView({required this.store, this.onOpenOrder});
   final MarketplaceStore store;
+  final ValueChanged<AppNotification>? onOpenOrder;
+
+  void _open(BuildContext context, AppNotification item) {
+    // Mark locally and navigate immediately; the server acknowledgement must
+    // never make a notification tap feel unresponsive.
+    unawaited(store.markNotificationRead(item));
+    if (item.orderId == null || onOpenOrder == null) return;
+    Navigator.of(context).pop();
+    WidgetsBinding.instance.addPostFrameCallback((_) => onOpenOrder!(item));
+  }
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -1056,7 +1384,7 @@ class _NotificationsView extends StatelessWidget {
                   color: item.read ? Colors.white : const Color(0xFFFFF0E8),
                   borderRadius: BorderRadius.circular(20),
                   child: ListTile(
-                    onTap: () => store.markNotificationRead(item),
+                    onTap: () => _open(context, item),
                     contentPadding: const EdgeInsets.all(14),
                     leading: CircleAvatar(
                       backgroundColor: item.read
@@ -1066,12 +1394,18 @@ class _NotificationsView extends StatelessWidget {
                       child: Icon(icon),
                     ),
                     title: Text(
-                      item.title,
+                      store.language == 'ar'
+                          ? translateNotice(item.title)
+                          : item.title,
                       style: const TextStyle(fontWeight: FontWeight.w900),
                     ),
                     subtitle: Padding(
                       padding: const EdgeInsets.only(top: 4),
-                      child: Text(item.message),
+                      child: Text(
+                        store.language == 'ar'
+                            ? translateNotice(item.message)
+                            : item.message,
+                      ),
                     ),
                     trailing: item.read
                         ? null
@@ -1096,7 +1430,7 @@ class NotificationButton extends StatelessWidget {
     isLabelVisible: store.unreadNotifications > 0,
     label: Text('${store.unreadNotifications}'),
     child: IconButton.filledTonal(
-      tooltip: 'Notifications',
+      tooltip: store.tr('Notifications', 'الإشعارات'),
       onPressed: () => showNotifications(context, store),
       icon: const Icon(Icons.notifications_none_rounded),
     ),
@@ -1108,101 +1442,221 @@ class CategoryManagementPanel extends StatelessWidget {
   final MarketplaceStore store;
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Row(
+  Widget build(BuildContext context) {
+    Widget group(ProductKind kind, String title) {
+      final items = store.categories.where((c) => c.kind == kind).toList();
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Expanded(
+          Padding(
+            padding: const EdgeInsets.only(top: 6, bottom: 8),
             child: Text(
-              'Catégories',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
-            ),
-          ),
-          FilledButton.icon(
-            onPressed: () => _showAddCategory(context, store),
-            icon: const Icon(Icons.add_rounded),
-            label: const Text('Ajouter'),
-          ),
-        ],
-      ),
-      const SizedBox(height: 12),
-      ...store.categories.map(
-        (category) => Card(
-          margin: const EdgeInsets.only(bottom: 9),
-          child: ListTile(
-            leading: CircleAvatar(
-              backgroundColor: category.kind == ProductKind.meal
-                  ? const Color(0xFFFFE9DF)
-                  : const Color(0xFFE2EFE7),
-              child: Icon(
-                category.kind == ProductKind.meal
-                    ? Icons.restaurant_rounded
-                    : Icons.shopping_basket_rounded,
-                color: category.kind == ProductKind.meal ? _accent : _green,
+              '$title · ${items.length}',
+              style: const TextStyle(
+                color: _muted,
+                fontWeight: FontWeight.w800,
               ),
             ),
-            title: Text(
-              category.name,
-              style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+          if (items.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 9),
+              child: Text(
+                store.tr('Aucune catégorie.', 'لا توجد تصنيفات.'),
+                style: const TextStyle(color: _muted),
+              ),
             ),
-            subtitle: Text(
-              category.kind == ProductKind.meal ? 'Repas' : 'Supérette',
-            ),
-            trailing: Switch(
-              value: category.active,
-              onChanged: (_) => store.toggleCategory(category),
+          ...items.map(
+            (category) => Card(
+              margin: const EdgeInsets.only(bottom: 9),
+              child: ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: category.kind == ProductKind.meal
+                      ? const Color(0xFFFFE9DF)
+                      : const Color(0xFFE2EFE7),
+                  child: Icon(
+                    category.kind == ProductKind.meal
+                        ? Icons.restaurant_rounded
+                        : Icons.shopping_basket_rounded,
+                    color: category.kind == ProductKind.meal ? _accent : _green,
+                  ),
+                ),
+                title: Text(
+                  category.name,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                subtitle: Text(
+                  category.kind == ProductKind.meal ? 'Repas' : 'Supérette',
+                ),
+                trailing: Switch(
+                  value: category.active,
+                  onChanged: (_) => store.toggleCategory(category),
+                ),
+              ),
             ),
           ),
-        ),
-      ),
-    ],
-  );
-}
+        ],
+      );
+    }
 
-void _showAddCategory(BuildContext context, MarketplaceStore store) {
-  final controller = TextEditingController();
-  var kind = ProductKind.meal;
-  showDialog<void>(
-    context: context,
-    builder: (dialogContext) => StatefulBuilder(
-      builder: (context, setState) => AlertDialog(
-        title: const Text('Nouvelle catégorie'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
           children: [
-            TextField(
-              controller: controller,
-              decoration: InputDecoration(labelText: store.tr('Nom', 'الاسم')),
+            const Expanded(
+              child: Text(
+                'Catégories',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+              ),
             ),
-            const SizedBox(height: 12),
-            SegmentedButton<ProductKind>(
-              segments: const [
-                ButtonSegment(value: ProductKind.meal, label: Text('Repas')),
-                ButtonSegment(
-                  value: ProductKind.grocery,
-                  label: Text('Supérette'),
-                ),
-              ],
-              selected: {kind},
-              onSelectionChanged: (value) => setState(() => kind = value.first),
+            FilledButton.icon(
+              key: const Key('category-add'),
+              onPressed: () => _showAddCategory(context, store),
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Ajouter'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Annuler'),
+        const SizedBox(height: 12),
+        group(ProductKind.meal, store.tr('Repas', 'وجبات')),
+        group(ProductKind.grocery, store.tr('Supérette', 'بقالة')),
+      ],
+    );
+  }
+}
+
+void _showAddCategory(BuildContext context, MarketplaceStore store) {
+  final messenger = ScaffoldMessenger.of(context);
+  showDialog<String>(
+    context: context,
+    builder: (_) => _CategoryDialog(store: store),
+  ).then((created) {
+    if (created == null) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          store.tr(
+            'Catégorie « $created » créée. Elle est déjà disponible pour les partenaires.',
+            'تم إنشاء التصنيف «$created». أصبح متاحاً للشركاء.',
           ),
-          FilledButton(
-            onPressed: () async {
-              final ok = await store.addCategory(controller.text, kind);
-              if (dialogContext.mounted && ok) Navigator.pop(dialogContext);
-            },
-            child: const Text('Créer'),
+        ),
+      ),
+    );
+  });
+}
+
+class _CategoryDialog extends StatefulWidget {
+  const _CategoryDialog({required this.store});
+  final MarketplaceStore store;
+
+  @override
+  State<_CategoryDialog> createState() => _CategoryDialogState();
+}
+
+class _CategoryDialogState extends State<_CategoryDialog> {
+  final controller = TextEditingController();
+  var kind = ProductKind.meal;
+  bool saving = false;
+  String? error;
+
+  MarketplaceStore get store => widget.store;
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _create() async {
+    final name = controller.text.trim();
+    setState(() {
+      saving = true;
+      error = null;
+    });
+    final ok = await store.addCategory(name, kind);
+    if (!mounted) return;
+    if (ok) {
+      Navigator.pop(context, name);
+    } else {
+      setState(() {
+        saving = false;
+        error =
+            store.lastError ??
+            store.tr('Création impossible.', 'تعذر الإنشاء.');
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Nouvelle catégorie'),
+    content: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            key: const Key('category-name'),
+            controller: controller,
+            autofocus: true,
+            textCapitalization: TextCapitalization.sentences,
+            onChanged: (_) => setState(() => error = null),
+            decoration: InputDecoration(labelText: store.tr('Nom', 'الاسم')),
           ),
+          const SizedBox(height: 12),
+          Text(
+            store.tr('Type de catégorie', 'نوع التصنيف'),
+            style: const TextStyle(color: _muted, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 6),
+          SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<ProductKind>(
+              segments: [
+                ButtonSegment(
+                  value: ProductKind.meal,
+                  icon: const Icon(Icons.restaurant_rounded, size: 18),
+                  label: Text(store.tr('Repas', 'وجبات')),
+                ),
+                ButtonSegment(
+                  value: ProductKind.grocery,
+                  icon: const Icon(Icons.shopping_basket_rounded, size: 18),
+                  label: Text(store.tr('Supérette', 'بقالة')),
+                ),
+              ],
+              selected: {kind},
+              onSelectionChanged: saving
+                  ? null
+                  : (value) => setState(() => kind = value.first),
+            ),
+          ),
+          if (error != null) ...[
+            const SizedBox(height: 12),
+            FormMessage(error!),
+          ],
         ],
       ),
     ),
-  ).whenComplete(controller.dispose);
+    actions: [
+      TextButton(
+        onPressed: saving ? null : () => Navigator.pop(context),
+        child: const Text('Annuler'),
+      ),
+      FilledButton(
+        key: const Key('category-create'),
+        onPressed: saving ? null : _create,
+        child: saving
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+            : const Text('Créer'),
+      ),
+    ],
+  );
 }

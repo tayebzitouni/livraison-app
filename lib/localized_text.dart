@@ -50,9 +50,107 @@ class Text extends material.Text {
   }
 }
 
+/// Translates the French texts sent by the server in notifications.
+String translateNotice(String value) {
+  final exact = _arabic[value] ?? _notices[value];
+  if (exact != null) return exact;
+  for (final rule in _noticePatterns) {
+    final match = rule.$1.firstMatch(value);
+    if (match != null) return rule.$2(match);
+  }
+  return value;
+}
+
+final _noticePatterns = <(RegExp, String Function(RegExpMatch))>[
+  (RegExp(r'^Commande (\S+) · (\d+) DA$'), (m) => 'الطلب ${m[1]} · ${m[2]} دج'),
+  (RegExp(r'^(\S+) vient d’être créée\.$'), (m) => 'تم إنشاء الطلب ${m[1]}.'),
+  (
+    RegExp(r'^(\S+) a été validée par un livreur\.$'),
+    (m) => 'قبل موصل الطلب ${m[1]}.',
+  ),
+  (
+    RegExp(r'^(\S+) attend la confirmation du client\.$'),
+    (m) => 'الطلب ${m[1]} بانتظار تأكيد الزبون.',
+  ),
+  (
+    RegExp(r'^Le client a confirmé la réception de (\S+)\.$'),
+    (m) => 'أكّد الزبون استلام الطلب ${m[1]}.',
+  ),
+  (
+    RegExp(r'^(\S+) a été confirmée par le client\.$'),
+    (m) => 'أكّد الزبون الطلب ${m[1]}.',
+  ),
+  (
+    RegExp(r'^Votre gain de (\d+) DA est disponible\.$'),
+    (m) => 'أرباحك البالغة ${m[1]} دج متاحة.',
+  ),
+  (RegExp(r'^(.+) a publié (.+)\.$'), (m) => '${m[1]} نشر ${m[2]}.'),
+  (
+    RegExp(r'^(.+) \((.+)\) vient de s’inscrire\.$'),
+    (m) => 'سجّل ${m[1]} (${m[2]}) حديثاً.',
+  ),
+  (RegExp(r'^(.+) demande (\d+) DA\.$'), (m) => '${m[1]} يطلب ${m[2]} دج.'),
+  (
+    RegExp(r'^Votre livreur arrive avec la commande (\S+)\.$'),
+    (m) => 'موصلك قادم بالطلب ${m[1]}.',
+  ),
+  (RegExp(r'^(\S+) · (.+)$'), (m) => '${m[1]} · ${_notices[m[2]] ?? m[2]}'),
+];
+
+const _notices = <String, String>{
+  'Bienvenue sur Wasla': 'مرحباً بك في وصلة',
+  'Votre compte a été créé par l’administrateur.': 'أنشأ المدير حسابك.',
+  'Votre cuisine est inscrite. Ajoutez vos plats : ils seront visibles après validation.':
+      'تم تسجيل مطبخك. أضف أطباقك: ستظهر بعد الموافقة.',
+  'Nouvelle cuisine inscrite': 'مطبخ جديد مسجّل',
+  'Nouveau produit': 'منتج جديد',
+  'Produit approuvé': 'تمت الموافقة على المنتج',
+  'Produit refusé': 'تم رفض المنتج',
+  'Votre produit est visible par les clients.': 'منتجك ظاهر للزبائن الآن.',
+  'Votre produit doit être corrigé.': 'يجب تعديل منتجك.',
+  'Nouvelle livraison disponible': 'توصيلة جديدة متاحة',
+  'Nouvelle commande à accepter': 'طلب جديد بانتظار القبول',
+  'Commande mise à jour': 'تم تحديث الطلب',
+  'Confirmez votre livraison': 'أكّد استلام طلبك',
+  'Livraison annoncée': 'تم الإعلان عن التسليم',
+  'Livraison confirmée': 'تم تأكيد التسليم',
+  'Commande terminée': 'اكتمل الطلب',
+  'Nouvelle demande de retrait': 'طلب سحب جديد',
+  'Un livreur a accepté votre commande.': 'قبل موصل طلبك.',
+  'Le commerce a accepté votre commande.': 'قبل المتجر طلبك.',
+  'Votre commande est en préparation.': 'طلبك قيد التحضير.',
+  'Votre commande est prête à être récupérée.': 'طلبك جاهز للاستلام.',
+  'Votre commande est en route.': 'طلبك في الطريق.',
+  'Le livreur indique avoir livré. Confirmez la réception.':
+      'أفاد الموصل بأنه سلّم الطلب. أكّد الاستلام.',
+  'Le statut de votre commande a changé.': 'تغيّرت حالة طلبك.',
+  'Commande en route': 'الطلب في الطريق',
+  'Votre espace est prêt. Découvrez les partenaires locaux.':
+      'فضاؤك جاهز. اكتشف الشركاء المحليين.',
+};
+
 String _translate(String value) {
   final exact = _arabic[value];
   if (exact != null) return exact;
+  // Compound lines such as "Healthy · Client 1490 DA · Gros 820 DA" or
+  // "name@mail · Livreur": translate each part on its own.
+  if (value.contains(' · ')) {
+    final parts = value.split(' · ');
+    final mapped = parts.map(_translate).toList();
+    return mapped.join(' · ');
+  }
+  var out = _translateSentence(value);
+  // Prices and durations follow the Arabic style: "1490 دج", "20–30 د".
+  out = out.replaceAllMapped(RegExp(r'(\d)\s*DA\b'), (m) => '${m[1]} دج');
+  out = out.replaceAllMapped(RegExp(r'(\d)\s*min\b'), (m) => '${m[1]} د');
+  return out;
+}
+
+String _translateSentence(String value) {
+  for (final rule in _sentencePatterns) {
+    final match = rule.$1.firstMatch(value);
+    if (match != null) return rule.$2(match);
+  }
   if (value.startsWith('Bonjour ')) {
     return value.replaceFirst('Bonjour ', 'مرحباً ');
   }
@@ -60,13 +158,17 @@ String _translate(String value) {
     return value.replaceFirst('Livraison ', 'التوصيل ');
   }
   if (value.startsWith('Commission ')) {
-    return value.replaceFirst('Commission ', 'العمولة ');
+    final rest = value.substring('Commission '.length);
+    return 'العمولة ${_translate(rest)}';
   }
   if (value.startsWith('Frais de livraison ')) {
     return value.replaceFirst('Frais de livraison ', 'رسوم التوصيل ');
   }
-  if (value.startsWith('Client ')) {
+  if (RegExp(r'^Client \d').hasMatch(value)) {
     return value.replaceFirst('Client ', 'الزبون ');
+  }
+  if (RegExp(r'^Gros \d').hasMatch(value)) {
+    return value.replaceFirst('Gros ', 'الجملة ');
   }
   if (value.startsWith('Allergènes :')) {
     return value.replaceFirst('Allergènes :', 'مسببات الحساسية:');
@@ -78,9 +180,6 @@ String _translate(String value) {
     return value
         .replaceFirst('Commande ', 'الطلب ')
         .replaceFirst(' envoyée', ' أُرسل');
-  }
-  if (value.contains(' articles · ')) {
-    return value.replaceFirst(' articles · ', ' منتجات · ');
   }
   if (value.endsWith(' offres')) {
     return value.replaceFirst(' offres', ' عروض');
@@ -108,6 +207,22 @@ String _translate(String value) {
   }
   return value;
 }
+
+final _sentencePatterns = <(RegExp, String Function(RegExpMatch))>[
+  (
+    RegExp(r'^Vos opérations (.+) en un coup d’œil\.$'),
+    (m) => 'نظرة سريعة على عمليات ${_arabic[_capital(m[1]!)] ?? m[1]}.',
+  ),
+  (
+    RegExp(r'^(\d+) produit\(s\) en attente$'),
+    (m) => '${m[1]} منتج(ات) بانتظار الموافقة',
+  ),
+  (RegExp(r'^(\d+) articles?$'), (m) => '${m[1]} منتجات'),
+  (RegExp(r'^Langue : (.+)$'), (m) => 'اللغة: ${m[1]}'),
+];
+
+String _capital(String value) =>
+    value.isEmpty ? value : value[0].toUpperCase() + value.substring(1);
 
 const _arabic = <String, String>{
   'Accueil': 'الرئيسية',
@@ -242,7 +357,7 @@ const _arabic = <String, String>{
   'SOLDE DISPONIBLE': 'الرصيد المتاح',
   'Demander un retrait': 'طلب سحب',
   'Cette semaine': 'هذا الأسبوع',
-  'Pourboires': 'الإكراميات',
+  'Droits de livraison': 'حقوق التوصيل',
   'Terminées': 'مكتملة',
   'Note': 'التقييم',
   'Volume brut': 'إجمالي المبيعات',
@@ -314,7 +429,86 @@ const _arabic = <String, String>{
   'Réception confirmée': 'تم تأكيد الاستلام',
   'Annulée': 'ملغى',
   'Aide et support': 'المساعدة والدعم',
+  'Politique de confidentialité': 'سياسة الخصوصية',
+  'Conditions d’utilisation': 'شروط الخدمة',
+  'Politique de remboursement': 'سياسة الاسترجاع',
+  'Confidentialité': 'الخصوصية',
+  'Conditions': 'الشروط',
+  'Remboursement': 'الاسترجاع',
   'Réponse sous 24 heures': 'رد خلال 24 ساعة',
   'Une question sur une commande ou un paiement ?': 'لديك سؤال عن طلب أو دفع؟',
   'Tous les jours, 08:00–22:00': 'يومياً، 08:00–22:00',
+  'Activité du jour': 'نشاط اليوم',
+  'Commandes du jour': 'طلبات اليوم',
+  'Ventes du jour': 'مبيعات اليوم',
+  'Commission du jour': 'عمولة اليوم',
+  'Nouveaux utilisateurs': 'مستخدمون جدد',
+  'Cumul de la plateforme': 'إجمالي المنصة',
+  'Aucune activité ce jour': 'لا يوجد نشاط في هذا اليوم',
+  'Les commandes de la date choisie apparaîtront ici.':
+      'تظهر هنا طلبات التاريخ المختار.',
+  'Jour précédent': 'اليوم السابق',
+  'Jour suivant': 'اليوم التالي',
+  'Aujourd’hui': 'اليوم',
+  'Hier': 'أمس',
+  'Comptes partenaires': 'حسابات الشركاء',
+  'Ouvrir un compte partenaire': 'فتح حساب شريك',
+  'Créez les comptes partenaires et contrôlez leurs accès.':
+      'أنشئ حسابات الشركاء وتحكم في صلاحياتهم.',
+  'Protégé': 'محمي',
+  'Confirmer la livraison': 'تأكيد التسليم',
+  'Confirmer la réception': 'تأكيد الاستلام',
+  'Confirmer la récupération': 'تأكيد الاستلام من المتجر',
+  'Valider et prendre': 'قبول وأخذ الطلب',
+  'Accepter la commande': 'قبول الطلب',
+  'Commencer la préparation': 'بدء التحضير',
+  'Marquer comme prête': 'وضع علامة جاهز',
+  'Nouveau plat': 'طبق جديد',
+  'Nouveau produit': 'منتج جديد',
+  'Paiement reçu': 'تم استلام الدفع',
+  'Gains par jour': 'الأرباح اليومية',
+  'Vos droits de livraison, jour par jour.':
+      'حقوق التوصيل الخاصة بك، يوماً بيوم.',
+  'Aucun gain pour le moment': 'لا أرباح حتى الآن',
+  'Vos droits de livraison apparaîtront ici après la confirmation du client.':
+      'تظهر حقوق التوصيل هنا بعد تأكيد الزبون.',
+  'Livraison': 'التوصيل',
+  'Demande de retrait enregistrée.': 'تم تسجيل طلب السحب.',
+  'Retrait impossible.': 'تعذر السحب.',
+  'Action impossible.': 'الإجراء غير ممكن.',
+  'Complétez les champs obligatoires.': 'أكمل الحقول الإلزامية.',
+  'Informations incorrectes ou compte introuvable.':
+      'معلومات غير صحيحة أو الحساب غير موجود.',
+  'Compte': 'الحساب',
+  'Compte introuvable.': 'الحساب غير موجود.',
+  'Valeurs invalides.': 'قيم غير صالحة.',
+  'Prix client invalide.': 'سعر الزبون غير صالح.',
+  'Mes commandes': 'طلباتي',
+  'Historique': 'السجل',
+  'Prix de gros *': 'سعر الجملة *',
+  'Cuisine': 'المطبخ',
+  'Destination': 'الوجهة',
+  'Vous': 'أنت',
+  'Voir les détails': 'عرض التفاصيل',
+  'Plat': 'طبق',
+  'Produit': 'منتج',
+  'Type': 'النوع',
+  'Préparation': 'التحضير',
+  'Rapports et PDF': 'التقارير و PDF',
+  'Rapports': 'التقارير',
+  'Paiements': 'المدفوعات',
+  'Mouvements': 'الحركات',
+  'Total payé': 'المجموع المدفوع',
+  'Solde disponible': 'الرصيد المتاح',
+  'Retrait': 'سحب',
+  'Adresses': 'العناوين',
+  'Informations personnelles': 'المعلومات الشخصية',
+  'Se déconnecter': 'تسجيل الخروج',
+  'Langue': 'اللغة',
+  'Temps en ligne': 'وقت الاتصال',
+  'Chargement…': 'جارٍ التحميل…',
+  'Réessayer': 'إعادة المحاولة',
+  'Catalogue indisponible': 'الكتالوج غير متاح',
+  'Nous récupérons les restaurants et produits.': 'نجلب المطاعم والمنتجات.',
+  'Vérifiez votre connexion puis réessayez.': 'تحقق من اتصالك ثم أعد المحاولة.',
 };

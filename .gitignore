@@ -3,6 +3,7 @@
 *.log
 *.pyc
 *.swp
+*.lnk
 .DS_Store
 .atom/
 .build/
@@ -51,6 +52,15 @@ app.*.map.json
 /android/app/release
 /android/build/
 
+# Release upload key — keep locally, never publish
+android/key.properties
+android/*.jks
+android/UPLOAD-KEY.txt
+
 # Local preview builds
 *.apk
+*.aab
 test/failures/
+play-store-pack/*.apk
+play-store-pack/*.aab
+Wasla-PlayStore-*.zip

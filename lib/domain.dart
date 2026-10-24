@@ -16,6 +16,13 @@ enum OrderStatus {
   cancelled,
 }
 
+/// Consistent, compact order reference shown throughout the app.
+String orderReference(String value) {
+  final clean = value.trim();
+  if (clean.isEmpty) return '#—';
+  return clean.startsWith('#') ? clean : '#$clean';
+}
+
 extension UserRoleUi on UserRole {
   String get label => switch (this) {
     UserRole.client => 'Client',
@@ -81,12 +88,19 @@ class AppUser {
     this.address = '',
     this.avatarUrl,
     this.active = true,
+    this.createdAt,
   });
   final String id, password;
   String name, email, phone, address;
   final UserRole role;
   String? businessName, avatarUrl;
   bool active;
+  DateTime? createdAt;
+
+  /// Device-bound customer accounts created automatically for guests.
+  bool get isGuestAccount =>
+      id == 'guest-local' ||
+      (email.startsWith('guest-') && email.endsWith('@wasla.local'));
 }
 
 class Product {
@@ -180,11 +194,23 @@ class MarketOrder {
     this.paid = false,
     this.deliveryFee = 200,
     this.commissionAmount = 0,
+    this.customerPhone = '',
+    this.merchantPhone = '',
+    this.merchantAddress = '',
+    this.courierPhone = '',
+    this.serverId,
   });
   final String id, clientId, merchantId, address, note;
   final String? merchantName;
+
+  /// Identifier used by wallet entries (the order code offline).
+  final String? serverId;
   final String? clientName;
   final String? courierName;
+
+  /// Contact details are only filled in by the server for the people who need
+  /// to reach each other (customer, assigned courier, kitchen).
+  final String customerPhone, merchantPhone, merchantAddress, courierPhone;
   final List<OrderItem> items;
   final DateTime createdAt;
   String? courierId;

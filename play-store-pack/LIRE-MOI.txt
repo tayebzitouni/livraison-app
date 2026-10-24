@@ -1,0 +1,60 @@
+WASLA — PACK PLAY STORE (v1.5.0)
+================================
+
+À envoyer à la personne qui publie l’app sur Google Play.
+
+1) Fichier à uploader dans Play Console
+   - Wasla-Livraison-v1.5.0.aab   ← OBLIGATOIRE (Android App Bundle)
+   - Wasla-Livraison-v1.5.0.apk    ← pour tester sur un téléphone (optionnel)
+
+   Cette version est signée en mode RELEASE (pas debug).
+   Ne pas utiliser les anciens fichiers v1.4.8 ou v1.4.9.
+
+2) Package Android
+   dz.wasla.livraison
+   Version : 1.5.0
+   versionCode : 15
+   Nom affiché : Wasla Livraison
+   Icône : logo tajine sans texte (fichier graphics/app-icon-512.png)
+   Le nom de l’application reste Wasla. Uploader aussi cette image 512×512 comme icône Play Store.
+
+3) Liens politiques (à coller dans Play Console)
+   Confidentialité :
+   https://livraison-api.story-trends-dz.workers.dev/privacy
+   Conditions :
+   https://livraison-api.story-trends-dz.workers.dev/terms
+   Remboursement :
+   https://livraison-api.story-trends-dz.workers.dev/refund
+   Arabe : ajoutez ?lang=ar à la fin de l’URL.
+
+4) Contact
+   support@wasla.dz
+   0554 91 75 45
+
+5) Textes Play Console
+   Voir le dossier listing/ (FR + AR).
+
+6) Images
+   Dossier graphics/ :
+   - app-icon-512.png : icône de l’application (512×512)
+   - feature-graphic-1024x500.png : image mise en avant Play Store
+     Dimensions exactes : 1024 × 500 px (hauteur 500). À uploader
+     dans « Image mise en avant » / Feature graphic.
+   - visuels produits et bannière
+   IMPORTANT : prendre aussi 4 à 8 captures RÉELLES sur téléphone
+   (accueil, produit, panier, profil avec les 3 politiques).
+
+7) Catégorie Play
+   Food & Drink / Nourriture et boissons
+   Pays : Algérie
+   Paiement dans l’app : paiement à la livraison (pas de Google Play Billing)
+
+
+حزمة وصلة لمتجر بلاي (الإصدار 1.5.0)
+=====================================
+
+1) ارفع ملف Wasla-Livraison-v1.5.0.aab فقط (موقّع release وليس debug)
+2) اسم الحزمة: dz.wasla.livraison
+3) شعار التطبيق: طاجين — graphics/app-icon-512.png
+4) روابط السياسات موجودة أعلاه
+5) النصوص والصور في مجلدات listing و graphics

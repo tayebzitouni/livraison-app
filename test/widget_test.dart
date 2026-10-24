@@ -72,13 +72,12 @@ void main() {
     expect(find.text('Supérette'), findsNothing);
     expect(find.text('Accès administrateur'), findsNothing);
     expect(find.text('Accès administrateur sécurisé'), findsNothing);
-    await tester.ensureVisible(
-      find.text('Votre compte partenaire est créé par l’administrateur.'),
-    );
-    expect(
-      find.text('Votre compte partenaire est créé par l’administrateur.'),
-      findsOneWidget,
-    );
+    const note =
+        'Les comptes livreur et supérette sont ouverts par l’administrateur.';
+    await tester.ensureVisible(find.text(note));
+    expect(find.text(note), findsOneWidget);
+    // Kitchens can register themselves; no role picker is offered.
+    expect(find.text('Vous avez une cuisine ? Inscrivez-vous'), findsOneWidget);
     expect(find.text('Créer un compte'), findsNothing);
   });
 
@@ -217,6 +216,30 @@ void main() {
     expect(find.text('Compte, préférences et assistance.'), findsOneWidget);
   });
 
+  testWidgets('profile opens privacy, terms and refund pages', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await pumpRole(tester, 'client@wasla.dz', 'Demo123!', UserRole.client);
+    await tapNav(tester, 'Profil');
+    await tester.ensureVisible(find.text('Politique de confidentialité'));
+    await tester.tap(find.text('Politique de confidentialité'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('wasla.dz'), findsWidgets);
+    expect(
+      find.textContaining('livraison-api.story-trends-dz.workers.dev/privacy'),
+      findsOneWidget,
+    );
+    await closeSheet(tester);
+    await tester.ensureVisible(find.text('Conditions d’utilisation'));
+    await tester.tap(find.text('Conditions d’utilisation'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('dinars algériens'), findsOneWidget);
+    await closeSheet(tester);
+    await tester.ensureVisible(find.text('Politique de remboursement'));
+    await tester.tap(find.text('Politique de remboursement'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('24 heures'), findsWidgets);
+  });
+
   testWidgets('courier can accept an offer, navigate and request withdrawal', (
     tester,
   ) async {
@@ -260,8 +283,10 @@ void main() {
     await tester.tap(find.text('Envoyer pour validation'));
     await tester.pumpAndSettle();
     expect(
-      find.text('Ajoutez le média et complétez tous les détails obligatoires.'),
-      findsWidgets,
+      find.text(
+        'Complétez les champs obligatoires : nom, description, catégorie et votre prix de vente.',
+      ),
+      findsOneWidget,
     );
     await closeSheet(tester);
     await store.addProduct(

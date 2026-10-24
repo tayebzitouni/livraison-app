@@ -1,3 +1,5 @@
+import { legalResponse, matchLegalPath } from './legal';
+
 type Role = 'client' | 'courier' | 'restaurant' | 'supermarket' | 'admin';
 type User = {
   id: string;
@@ -28,6 +30,7 @@ type ProductRow = {
   retail_price: number;
   wholesale_price: number;
   kind: string;
+  active: number;
 };
 
 const cors = {
@@ -43,10 +46,29 @@ const json = (data: unknown, status = 200) =>
     headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
   });
 const uid = () => crypto.randomUUID();
+const accountWithEmail = (env: Env, email: string) =>
+  env.DB.prepare('SELECT id FROM users WHERE lower(email)=?').bind(email).first<{ id: string }>();
+const commissionFor = (merchantPrice: number, percent: number) =>
+  Math.round(merchantPrice * percent / 100);
+const customerPriceFor = (merchantPrice: number, percent: number) =>
+  merchantPrice + commissionFor(merchantPrice, percent);
+const orderPriceFor = (product: ProductRow, percent: number) =>
+  product.kind === 'grocery'
+    ? product.retail_price
+    : customerPriceFor(product.wholesale_price, percent);
+const nextOrderCode = async (env: Env) => {
+  const row = await env.DB.prepare(
+    `UPDATE order_counter SET next_value=next_value+1 WHERE id=1
+     RETURNING next_value-1 AS code`,
+  ).first<{ code: number }>();
+  if (!row) throw new Error('Order counter is missing');
+  return String(row.code);
+};
 const hex = (value: Uint8Array) =>
   [...value].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 const bytes = (value: string) =>
   new Uint8Array(value.match(/.{2}/g)?.map((part) => parseInt(part, 16)) ?? []);
+const PBKDF2_ITERATIONS = 100000;
 
 async function legacyHash(value: string) {
   return hex(
@@ -66,16 +88,26 @@ async function passwordHash(value: string) {
     ['deriveBits'],
   );
   const result = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt, iterations: 120000, hash: 'SHA-256' },
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
     key,
     256,
   );
-  return `pbkdf2$120000$${hex(salt)}$${hex(new Uint8Array(result))}`;
+  return `pbkdf2$${PBKDF2_ITERATIONS}$${hex(salt)}$${hex(new Uint8Array(result))}`;
 }
 
 async function verifyPassword(value: string, stored: string) {
   if (!stored.startsWith('pbkdf2$')) return (await legacyHash(value)) === stored;
   const [, iterations, salt, expected] = stored.split('$');
+  const iterationCount = Number(iterations);
+  if (
+    !Number.isInteger(iterationCount) ||
+    iterationCount < 1 ||
+    iterationCount > PBKDF2_ITERATIONS ||
+    !/^[0-9a-f]{32}$/i.test(salt) ||
+    !/^[0-9a-f]{64}$/i.test(expected)
+  ) {
+    return false;
+  }
   const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(value),
@@ -88,7 +120,7 @@ async function verifyPassword(value: string, stored: string) {
       {
         name: 'PBKDF2',
         salt: bytes(salt),
-        iterations: Number(iterations),
+        iterations: iterationCount,
         hash: 'SHA-256',
       },
       key,
@@ -218,6 +250,10 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
     const url = new URL(request.url);
     try {
+      if (request.method === 'GET') {
+        const legal = matchLegalPath(url.pathname);
+        if (legal) return legalResponse(legal, url.searchParams.get('lang'));
+      }
       if (url.pathname === '/api/health') {
         return json({ ok: true, service: env.APP_NAME, now: new Date().toISOString() });
       }
@@ -231,13 +267,159 @@ export default {
         return serveMedia(request, env, url);
       }
       if (url.pathname === '/api/auth/signup' && request.method === 'POST') {
-        return json({ error: 'admin_managed_accounts' }, 403);
+        // Only kitchens may register themselves. Couriers and supermarkets are
+        // opened by the administrator. Product publication stays gated by the
+        // admin approval step, so a new kitchen cannot sell anything unreviewed.
+        const body = await request.json<{
+          name?: string;
+          email?: string;
+          password?: string;
+          role?: string;
+          businessName?: string;
+          phone?: string;
+        }>();
+        if ((body.role ?? 'restaurant') !== 'restaurant') {
+          return json({ error: 'kitchen_only' }, 403);
+        }
+        const name = body.name?.trim() ?? '';
+        const email = body.email?.trim().toLowerCase() ?? '';
+        const businessName = body.businessName?.trim() ?? '';
+        const phone = body.phone?.trim() ?? '';
+        if (
+          name.length < 2 ||
+          !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ||
+          (body.password?.length ?? 0) < 8 ||
+          businessName.length < 2 ||
+          phone.length > 30
+        ) {
+          return json({ error: 'invalid_account' }, 400);
+        }
+        if (await accountWithEmail(env, email)) {
+          return json({ error: 'email_exists' }, 409);
+        }
+        const userId = uid();
+        const hash = await passwordHash(body.password!);
+        try {
+          // A notification failure must never roll back a valid account.
+          await env.DB.prepare(
+            `INSERT INTO users
+              (id,email,password_hash,full_name,role,business_name,phone)
+             VALUES(?,?,?,?,'restaurant',?,?)`,
+          ).bind(userId, email, hash, name, businessName, phone || null).run();
+        } catch (error) {
+          // This second check handles two simultaneous requests safely.
+          if (await accountWithEmail(env, email)) {
+            return json({ error: 'email_exists' }, 409);
+          }
+          console.error('Kitchen account creation failed', error);
+          return json({ error: 'account_creation_failed' }, 500);
+        }
+        // Return a session directly. The old signup-then-login sequence could
+        // create the account successfully and still show "email exists" after
+        // a lost response or a slow second request.
+        const token = uid();
+        try {
+          await env.DB.prepare(
+            "INSERT INTO sessions(token,user_id,expires_at) VALUES(?,?,datetime('now','+30 days'))",
+          )
+            .bind(token, userId)
+            .run();
+        } catch (error) {
+          console.error('Kitchen signup session failed', error);
+          return json({ error: 'account_creation_failed' }, 500);
+        }
+        try {
+          await env.DB.batch([
+            notification(
+              env,
+              userId,
+              'Bienvenue sur Wasla',
+              'Votre cuisine est inscrite. Ajoutez vos plats : ils seront visibles après validation.',
+              'account',
+              null,
+              `account:${userId}:created`,
+            ),
+            roleNotification(
+              env,
+              'admin',
+              'Nouvelle cuisine inscrite',
+              `${businessName} (${name}) vient de s’inscrire.`,
+              'account',
+              null,
+              `account:${userId}:signup`,
+            ),
+          ]);
+        } catch (error) {
+          console.error('Kitchen account notification failed', error);
+        }
+        return json(
+          {
+            ok: true,
+            id: userId,
+            token,
+            user: {
+              id: userId,
+              email,
+              name,
+              role: 'restaurant',
+              business_name: businessName,
+              phone: phone || null,
+              address: '',
+              avatar_url: null,
+            },
+          },
+          201,
+        );
+      }
+      if (url.pathname === '/api/auth/guest' && request.method === 'POST') {
+        // Device-bound customer account so that guests keep their order history
+        // and their orders reach the couriers. It has the plain `client` role.
+        const body = await request.json<{ email?: string; password?: string }>();
+        const email = body.email?.trim().toLowerCase() ?? '';
+        const password = body.password ?? '';
+        if (!/^guest-[a-z0-9-]{8,80}@wasla\.local$/.test(email) || password.length < 16 || password.length > 128) {
+          return json({ error: 'invalid_guest' }, 400);
+        }
+        const userId = uid();
+        try {
+          await env.DB.prepare(
+            `INSERT INTO users(id,email,password_hash,full_name,role) VALUES(?,?,?,?,'client')`,
+          )
+            // The password is a long random secret generated by the app, so a
+            // fast hash is enough and keeps this public endpoint cheap.
+            .bind(userId, email, await legacyHash(password), 'Invité')
+            .run();
+        } catch {
+          return json({ error: 'email_exists' }, 409);
+        }
+        const token = uid();
+        await env.DB.prepare(
+          "INSERT INTO sessions(token,user_id,expires_at) VALUES(?,?,datetime('now','+30 days'))",
+        )
+          .bind(token, userId)
+          .run();
+        return json(
+          {
+            token,
+            user: {
+              id: userId,
+              email,
+              name: 'Invité',
+              role: 'client',
+              business_name: null,
+              phone: null,
+              address: '',
+              avatar_url: null,
+            },
+          },
+          201,
+        );
       }
       if (url.pathname === '/api/auth/login' && request.method === 'POST') {
         const body = await request.json<{ email?: string; password?: string }>();
         const user = await env.DB.prepare(
           `SELECT id,email,password_hash,full_name,role,business_name,phone,
-            address,avatar_url,active FROM users WHERE email=?`,
+            address,avatar_url,active FROM users WHERE lower(email)=?`,
         )
           .bind(body.email?.trim().toLowerCase() ?? '')
           .first<User & { password_hash: string }>();
@@ -272,8 +454,33 @@ export default {
         return json({ ok: true }, 201);
       }
 
+      // The catalogue can be browsed before any account exists; everything
+      // else needs a session.
+      if (
+        request.method === 'GET' &&
+        !request.headers.get('Authorization') &&
+        (url.pathname === '/api/products' || url.pathname === '/api/categories')
+      ) {
+        return json(
+          url.pathname === '/api/products'
+            ? await env.DB.prepare(
+                `SELECT p.*,u.business_name FROM products p JOIN users u ON u.id=p.owner_id
+                 WHERE u.active=1 AND p.approval_status='approved'
+                 ORDER BY p.created_at DESC`,
+              ).all()
+            : await env.DB.prepare(
+                `SELECT id,name,kind,active,sort_order FROM categories WHERE active=1
+                 ORDER BY kind,sort_order,name`,
+              ).all(),
+        );
+      }
+
       const current = await sessionUser(request, env);
       if (!current) return json({ error: 'unauthorized' }, 401);
+
+      if (url.pathname === '/api/auth/me' && request.method === 'GET') {
+        return json({ user: publicUser(current) });
+      }
 
       if (url.pathname === '/api/users' && request.method === 'POST') {
         if (current.role !== 'admin') return json({ error: 'admin_only' }, 403);
@@ -298,22 +505,34 @@ export default {
         ) {
           return json({ error: 'invalid_account' }, 400);
         }
+        if (await accountWithEmail(env, email)) {
+          return json({ error: 'email_exists' }, 409);
+        }
         const userId = uid();
+        const hash = await passwordHash(password);
+        try {
+          await env.DB.prepare(
+            `INSERT INTO users
+              (id,email,password_hash,full_name,role,business_name,phone)
+             VALUES(?,?,?,?,?,?,?)`,
+          ).bind(
+            userId,
+            email,
+            hash,
+            name,
+            role,
+            body.businessName?.trim() || null,
+            body.phone?.trim() || null,
+          ).run();
+        } catch (error) {
+          if (await accountWithEmail(env, email)) {
+            return json({ error: 'email_exists' }, 409);
+          }
+          console.error('Managed account creation failed', error);
+          return json({ error: 'account_creation_failed' }, 500);
+        }
         try {
           await env.DB.batch([
-            env.DB.prepare(
-              `INSERT INTO users
-                (id,email,password_hash,full_name,role,business_name,phone)
-               VALUES(?,?,?,?,?,?,?)`,
-            ).bind(
-              userId,
-              email,
-              await passwordHash(password),
-              name,
-              role,
-              body.businessName?.trim() || null,
-              body.phone?.trim() || null,
-            ),
             notification(
               env,
               userId,
@@ -324,8 +543,8 @@ export default {
               `account:${userId}:created`,
             ),
           ]);
-        } catch {
-          return json({ error: 'email_exists' }, 409);
+        } catch (error) {
+          console.error('Managed account notification failed', error);
         }
         return json({ ok: true, id: userId }, 201);
       }
@@ -337,8 +556,15 @@ export default {
             !Number.isInteger(body.deliveryFee) || body.deliveryFee! < 0) {
           return json({ error: 'invalid_settings' }, 400);
         }
-        await env.DB.prepare('UPDATE platform_settings SET commission_percent=?,delivery_fee=? WHERE id=1')
-          .bind(body.commissionPercent, body.deliveryFee).run();
+        await env.DB.batch([
+          env.DB.prepare('UPDATE platform_settings SET commission_percent=?,delivery_fee=? WHERE id=1')
+            .bind(body.commissionPercent, body.deliveryFee),
+          env.DB.prepare(
+            `UPDATE products
+             SET retail_price=wholesale_price + CAST(ROUND(wholesale_price * ? / 100.0) AS INTEGER)
+             WHERE kind='meal'`,
+          ).bind(body.commissionPercent),
+        ]);
         return json({ commission_percent: body.commissionPercent, delivery_fee: body.deliveryFee });
       }
 
@@ -475,7 +701,7 @@ export default {
       if (url.pathname === '/api/products' && request.method === 'GET') {
         const visibility = current.role === 'admin' ? '' : current.role === 'restaurant' || current.role === 'supermarket'
           ? 'AND ((p.active=1 AND p.approval_status=\'approved\') OR p.owner_id=?)'
-          : "AND p.active=1 AND p.approval_status='approved'";
+          : "AND p.approval_status='approved'";
         return json(
           await env.DB.prepare(
             `SELECT p.*,u.business_name FROM products p JOIN users u ON u.id=p.owner_id
@@ -504,29 +730,35 @@ export default {
         }>();
         const expected = current.role === 'supermarket' ? 'grocery' : 'meal';
         if (body.kind !== expected) return json({ error: 'product_kind_forbidden' }, 403);
-        const mediaUrl = normalizedMediaPath(body.mediaUrl, url.origin);
+        // Photo/video, ingredients and allergens are optional. Name,
+        // description, wholesale price and category are the only required fields.
+        const mediaUrl = body.mediaUrl ? normalizedMediaPath(body.mediaUrl, url.origin) : null;
+        if (body.mediaUrl && !mediaUrl) return json({ error: 'invalid_media' }, 400);
+        const mediaType = body.mediaType === 'video' ? 'video' : 'image';
+        const preparationMinutes = body.preparationMinutes ?? 15;
         const validPrices = Number.isInteger(body.wholesalePrice) && body.wholesalePrice! > 0;
         const validDetails =
-          (body.description?.trim().length ?? 0) >= 10 &&
-          Number.isInteger(body.preparationMinutes) &&
-          body.preparationMinutes! >= 1 &&
-          body.preparationMinutes! <= 240;
-        if (
-          !body.name?.trim() ||
-          !body.category?.trim() ||
-          !validPrices ||
-          !validDetails ||
-          !mediaUrl ||
-          !['image', 'video'].includes(body.mediaType ?? '')
-        ) {
-          return json({ error: 'invalid_product' }, 400);
-        }
+          (body.description?.trim().length ?? 0) >= 2 &&
+          Number.isInteger(preparationMinutes) &&
+          preparationMinutes >= 1 &&
+          preparationMinutes <= 240;
+        if (!body.name?.trim()) return json({ error: 'name_required' }, 400);
+        if (!body.category?.trim()) return json({ error: 'category_required' }, 400);
+        if (!validPrices) return json({ error: 'price_required' }, 400);
+        if (!validDetails) return json({ error: 'description_required' }, 400);
         const category = await env.DB.prepare(
           'SELECT id FROM categories WHERE name=? AND kind=? AND active=1',
         )
           .bind(body.category.trim(), expected)
           .first<{ id: string }>();
         if (!category) return json({ error: 'invalid_category' }, 400);
+        const settings = await env.DB.prepare(
+          'SELECT commission_percent FROM platform_settings WHERE id=1',
+        ).first<{ commission_percent: number }>();
+        if (!settings) return json({ error: 'settings_missing' }, 500);
+        const customerPrice = expected === 'grocery'
+          ? body.wholesalePrice!
+          : customerPriceFor(body.wholesalePrice!, settings.commission_percent);
         const productId = uid();
         await env.DB.prepare(
           `INSERT INTO products
@@ -541,14 +773,14 @@ export default {
             body.description!.trim(),
             expected,
             body.category.trim(),
-            body.wholesalePrice,
+            customerPrice,
             body.wholesalePrice,
             body.emoji?.trim() || '🍽️',
             mediaUrl,
-            body.mediaType,
+            mediaType,
             body.ingredients?.trim() ?? '',
             body.allergens?.trim() ?? '',
-            body.preparationMinutes,
+            preparationMinutes,
             body.calories ?? null,
             0,
             'pending',
@@ -570,16 +802,45 @@ export default {
         if (current.role !== 'admin') return json({ error: 'admin_only' }, 403);
         const body = await request.json<{ status?: string; retailPrice?: number }>();
         const productId = decodeURIComponent(productApprove[1]);
-        const product = await env.DB.prepare('SELECT owner_id,wholesale_price FROM products WHERE id=?')
-          .bind(productId).first<{owner_id:string; wholesale_price:number}>();
+        const product = await env.DB.prepare(
+          'SELECT owner_id,kind,wholesale_price,approval_status,active FROM products WHERE id=?',
+        )
+          .bind(productId)
+          .first<{
+            owner_id: string;
+            kind: string;
+            wholesale_price: number;
+            approval_status: string;
+            active: number;
+          }>();
         if (!product) return json({ error: 'not_found' }, 404);
-        if (!['approved','rejected'].includes(body.status ?? '') ||
-            (body.status === 'approved' && (!Number.isInteger(body.retailPrice) || body.retailPrice! < product.wholesale_price))) {
+        if (!['approved','rejected'].includes(body.status ?? '')) {
           return json({ error: 'invalid_approval' }, 400);
+        }
+        const settings = await env.DB.prepare(
+          'SELECT commission_percent FROM platform_settings WHERE id=1',
+        ).first<{ commission_percent: number }>();
+        if (!settings) return json({ error: 'settings_missing' }, 500);
+        const customerPrice = product.kind === 'grocery'
+          ? body.retailPrice
+          : customerPriceFor(product.wholesale_price, settings.commission_percent);
+        if (
+          product.kind === 'grocery' &&
+          body.status === 'approved' &&
+          (!Number.isInteger(customerPrice) || customerPrice! < product.wholesale_price)
+        ) {
+          return json({ error: 'invalid_retail_price' }, 400);
         }
         await env.DB.batch([
           env.DB.prepare('UPDATE products SET approval_status=?,retail_price=?,active=? WHERE id=?')
-            .bind(body.status, body.status === 'approved' ? body.retailPrice : product.wholesale_price, body.status === 'approved' ? 1 : 0, productId),
+            .bind(
+              body.status,
+              customerPrice ?? product.wholesale_price,
+              body.status === 'approved'
+                ? product.approval_status === 'approved' ? product.active : 1
+                : 0,
+              productId,
+            ),
           notification(env, product.owner_id, body.status === 'approved' ? 'Produit approuvé' : 'Produit refusé',
             body.status === 'approved' ? 'Votre produit est visible par les clients.' : 'Votre produit doit être corrigé.',
             'catalog', null, `product:${productId}:${body.status}`),
@@ -648,8 +909,9 @@ export default {
           args = [];
         }
         const orders = await env.DB.prepare(
-          `SELECT o.*,c.full_name customer_name,
-            COALESCE(m.business_name,m.full_name) merchant_name,d.full_name courier_name
+          `SELECT o.*,c.full_name customer_name,c.phone customer_account_phone,
+            COALESCE(m.business_name,m.full_name) merchant_name,m.phone merchant_phone,
+            m.address merchant_address,d.full_name courier_name,d.phone courier_phone
            FROM orders o JOIN users c ON c.id=o.customer_id
            JOIN users m ON m.id=o.merchant_id LEFT JOIN users d ON d.id=o.courier_id
            WHERE ${where} ORDER BY o.created_at DESC`,
@@ -657,22 +919,54 @@ export default {
           .bind(...args)
           .all<Record<string, unknown>>();
         if (!orders.results.length) return json({ results: [] });
-        const orderIds = orders.results.map((order) => order.id as string);
-        const marks = orderIds.map(() => '?').join(',');
         const items = await env.DB.prepare(
           `SELECT oi.order_id,oi.product_id,oi.quantity,oi.retail_unit_price,
             oi.wholesale_unit_price,p.name product_name,p.description,p.emoji,p.kind,
             p.category,p.media_url,p.media_type,p.ingredients,p.allergens,
             p.preparation_minutes,p.calories
            FROM order_items oi JOIN products p ON p.id=oi.product_id
-           WHERE oi.order_id IN (${marks}) ORDER BY oi.rowid`,
+           JOIN orders o ON o.id=oi.order_id
+           WHERE ${where} ORDER BY oi.rowid`,
         )
-          .bind(...orderIds)
+          .bind(...args)
           .all<Record<string, unknown>>();
+        // Group once instead of scanning every item again for every order.
+        // This keeps order history refreshes responsive as the database grows.
+        const itemsByOrder = new Map<string, Record<string, unknown>[]>();
+        for (const item of items.results) {
+          const orderId = item.order_id as string;
+          const grouped = itemsByOrder.get(orderId) ?? [];
+          grouped.push(item);
+          itemsByOrder.set(orderId, grouped);
+        }
+        // Phone numbers are only shared between the people who have to reach
+        // each other: the customer and the assigned courier see each other, the
+        // kitchen sees the assigned courier, and the courier sees the kitchen.
+        const share = (order: Record<string, unknown>) => {
+          const assigned = Boolean(order.courier_id);
+          const customerPhone = String(order.customer_phone || order.customer_account_phone || '');
+          const out: Record<string, unknown> = { ...order };
+          delete out.customer_account_phone;
+          const admin = current.role === 'admin';
+          out.customer_phone =
+            admin || (current.role === 'courier' && order.courier_id === current.id) || current.role === 'client'
+              ? customerPhone
+              : '';
+          out.merchant_phone = admin || (assigned && ['courier', 'client'].includes(current.role))
+            ? order.merchant_phone ?? ''
+            : '';
+          out.merchant_address = admin || (assigned && ['courier', 'client'].includes(current.role))
+            ? order.merchant_address ?? ''
+            : '';
+          out.courier_phone = admin || (assigned && ['client', 'restaurant', 'supermarket'].includes(current.role))
+            ? order.courier_phone ?? ''
+            : '';
+          return out;
+        };
         return json({
           results: orders.results.map((order) => ({
-            ...order,
-            items: items.results.filter((item) => item.order_id === order.id),
+            ...share(order),
+            items: itemsByOrder.get(order.id as string) ?? [],
           })),
         });
       }
@@ -683,7 +977,10 @@ export default {
           address?: string;
           paymentMethod?: string;
           note?: string;
+          phone?: string;
         }>();
+        const customerPhone = typeof body.phone === 'string' ? body.phone.trim() : '';
+        if (customerPhone.length > 30) return json({ error: 'invalid_phone' }, 400);
         if (
           !body.items?.length ||
           !body.address?.trim() ||
@@ -705,34 +1002,46 @@ export default {
         }
         const ids = body.items.map((item) => item.productId);
         const placeholders = ids.map(() => '?').join(',');
-        const found = await env.DB.prepare(
-          `SELECT id,owner_id,retail_price,wholesale_price,kind FROM products
-           WHERE active=1 AND approval_status='approved' AND id IN (${placeholders})`,
-        )
-          .bind(...ids)
-          .all<ProductRow>();
+        const [found, settings] = await Promise.all([
+          env.DB.prepare(
+            `SELECT id,owner_id,retail_price,wholesale_price,kind,active FROM products
+             WHERE approval_status='approved' AND id IN (${placeholders})`,
+          )
+            .bind(...ids)
+            .all<ProductRow>(),
+          env.DB.prepare('SELECT commission_percent,delivery_fee FROM platform_settings WHERE id=1')
+            .first<{ commission_percent: number; delivery_fee: number }>(),
+        ]);
+        if (!settings) return json({ error: 'settings_missing' }, 500);
         const products = new Map(found.results.map((product) => [product.id, product]));
         if (products.size !== new Set(ids).size) {
           return json({ error: 'product_not_found' }, 400);
         }
+        if (found.results.some((product) => product.active !== 1)) {
+          return json({ error: 'product_out_of_stock' }, 409);
+        }
         const merchants = new Set(found.results.map((product) => product.owner_id));
         if (merchants.size !== 1) return json({ error: 'single_merchant_required' }, 400);
         const foodTotal = body.items.reduce(
-          (sum, item) => sum + products.get(item.productId)!.retail_price * item.quantity,
+          (sum, item) =>
+            sum +
+            orderPriceFor(products.get(item.productId)!, settings.commission_percent) * item.quantity,
           0,
         );
-        const settings = await env.DB.prepare('SELECT commission_percent,delivery_fee FROM platform_settings WHERE id=1')
-          .first<{ commission_percent: number; delivery_fee: number }>();
-        if (!settings) return json({ error: 'settings_missing' }, 500);
-        const commissionAmount = Math.round(foodTotal * settings.commission_percent / 100);
+        const merchantTotal = body.items.reduce(
+          (sum, item) =>
+            sum + products.get(item.productId)!.wholesale_price * item.quantity,
+          0,
+        );
+        const commissionAmount = foodTotal - merchantTotal;
         const orderId = uid();
-        const code = `WS-${Date.now().toString().slice(-7)}`;
+        const code = await nextOrderCode(env);
         const merchantId = found.results[0].owner_id;
         await env.DB.batch([
           env.DB.prepare(
             `INSERT INTO orders
-              (id,code,customer_id,merchant_id,status,food_total,delivery_fee,commission_percent,commission_amount,address,customer_note,payment_method,payment_status)
-             VALUES(?,?,?,?,'placed',?,?,?,?,?,?,?,?)`,
+              (id,code,customer_id,merchant_id,status,food_total,delivery_fee,commission_percent,commission_amount,address,customer_note,customer_phone,payment_method,payment_status)
+             VALUES(?,?,?,?,'placed',?,?,?,?,?,?,?,?,?)`,
           ).bind(
             orderId,
             code,
@@ -744,6 +1053,7 @@ export default {
             commissionAmount,
             body.address.trim(),
             body.note?.trim() ?? '',
+            customerPhone,
             body.paymentMethod ?? 'cash',
             body.paymentMethod === 'Carte' ? 'paid' : 'pending',
           ),
@@ -758,7 +1068,7 @@ export default {
               orderId,
               item.productId,
               item.quantity,
-              product.retail_price,
+              orderPriceFor(product, settings.commission_percent),
               product.wholesale_price,
             );
           }),
@@ -994,6 +1304,55 @@ export default {
         return result.meta.changes === 1
           ? json({ ok: true })
           : json({ error: 'not_found' }, 404);
+      }
+
+      const walletSettlement = url.pathname.match(/^\/api\/wallet\/([^/]+)\/settle$/);
+      if (walletSettlement && request.method === 'POST') {
+        if (current.role !== 'admin') return json({ error: 'admin_only' }, 403);
+        const ownerId = decodeURIComponent(walletSettlement[1]);
+        const body = await request.json<{ amount?: number }>();
+        const account = await env.DB.prepare(
+          `SELECT u.id,u.full_name,u.business_name,u.role,
+            COALESCE(SUM(w.amount),0) AS balance
+           FROM users u LEFT JOIN wallet_entries w ON w.owner_id=u.id
+           WHERE u.id=? GROUP BY u.id`,
+        )
+          .bind(ownerId)
+          .first<{
+            id: string;
+            full_name: string;
+            business_name: string | null;
+            role: Role;
+            balance: number;
+          }>();
+        if (!account) return json({ error: 'not_found' }, 404);
+        if (!['courier', 'restaurant', 'supermarket'].includes(account.role)) {
+          return json({ error: 'settlement_forbidden' }, 403);
+        }
+        const balance = Math.trunc(Number(account.balance));
+        if (balance <= 0) return json({ ok: true, amount: 0, balance: 0 });
+        // Older app versions sent an empty body to pay the whole balance.
+        const amount = body.amount ?? balance;
+        if (!Number.isInteger(amount) || !amount || amount < 1 || amount > balance) {
+          return json({ error: 'invalid_payment_amount' }, 400);
+        }
+        const entryId = uid();
+        await env.DB.batch([
+          env.DB.prepare(
+            `INSERT INTO wallet_entries(id,owner_id,entry_type,amount)
+             VALUES(?,?,'admin_payment',?)`,
+          ).bind(entryId, ownerId, -amount),
+          notification(
+            env,
+            ownerId,
+            'Paiement effectué',
+            `L’administrateur a réglé votre solde de ${amount} DA.`,
+            'payment',
+            null,
+            `settlement:${entryId}`,
+          ),
+        ]);
+        return json({ ok: true, amount, balance: balance - amount });
       }
 
       if (url.pathname === '/api/withdrawals' && request.method === 'POST') {

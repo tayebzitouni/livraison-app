@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:livraison_app/build_expiry.dart';
 import 'package:livraison_app/order_contact.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:livraison_app/domain.dart';
@@ -36,7 +35,7 @@ void main() {
     expect(message, contains(order.id));
     expect(message, contains('Sans oignons'));
     expect(message, contains('0550123456'));
-    expect(waslaWhatsAppLocal, '0554917545');
+    expect(waslaWhatsAppLocal, '0668813239');
   });
 
   test('guest can keep an order without registering', () async {
@@ -62,7 +61,7 @@ void main() {
     expect(order.note, 'Sans oignons');
   });
 
-  test('admin chooses retail price and platform fees', () async {
+  test('supermarket retail price is set directly by the admin', () async {
     final store = MarketplaceStore();
     addTearDown(store.dispose);
     await store.login('superette@wasla.dz', 'Demo123!', UserRole.supermarket);
@@ -77,12 +76,15 @@ void main() {
     expect(product.approvalStatus, 'pending');
     expect(store.availableProducts, isNot(contains(product)));
     await store.login('admin@wasla.dz', 'Admin123!', UserRole.admin);
+    expect(await store.reviewProduct(product, approve: true), false);
     expect(
-      await store.reviewProduct(product, approve: true, retailPrice: 520),
+      await store.reviewProduct(product, approve: true, retailPrice: 480),
       true,
     );
     expect(await store.updateSettings(10, 150), true);
     expect(store.availableProducts, contains(product));
+    expect(product.wholesalePrice, 300);
+    expect(product.retailPrice, 480);
     await store.login('client@wasla.dz', 'Demo123!', UserRole.client);
     store.addToCart(product);
     final order = await store.checkout(
@@ -90,8 +92,44 @@ void main() {
       'Paiement à la livraison',
     );
     expect(order!.deliveryFee, 150);
-    expect(order.commissionAmount, 52);
+    expect(order.commissionAmount, 180);
   });
+
+  test('out-of-stock products stay visible but cannot enter the cart', () {
+    final store = MarketplaceStore();
+    addTearDown(store.dispose);
+    final product = store.product('p1')..available = false;
+    expect(store.clientProducts, contains(product));
+    expect(store.availableProducts, isNot(contains(product)));
+    store.addToCart(product);
+    expect(store.cart, isEmpty);
+  });
+
+  test(
+    'admin payment supports partial amounts and keeps an audit entry',
+    () async {
+      final store = MarketplaceStore();
+      addTearDown(store.dispose);
+      await store.login('admin@wasla.dz', 'Admin123!', UserRole.admin);
+      final courier = store.user('courier1');
+      expect(store.walletBalanceFor(courier.id), 200);
+      expect(await store.settleAccount(courier, amount: 75), true);
+      expect(store.walletBalanceFor(courier.id), 125);
+      expect(await store.settleAccount(courier, amount: 126), false);
+      expect(store.walletBalanceFor(courier.id), 125);
+      expect(await store.settleAccount(courier), true);
+      expect(store.walletBalanceFor(courier.id), 0);
+      expect(
+        store.walletEntries.any(
+          (entry) =>
+              entry.ownerId == courier.id &&
+              entry.type == 'admin_payment' &&
+              entry.amount == -75,
+        ),
+        true,
+      );
+    },
+  );
   test('admin requires correct private credentials', () async {
     final s = MarketplaceStore();
     expect(await s.login('admin@wasla.dz', 'wrong12', UserRole.client), false);
@@ -121,8 +159,8 @@ void main() {
     expect(order, isNotNull);
     expect(order!.address, '12 avenue Didouche');
     expect(order.note, 'Appeler à l’arrivée');
-    expect(order.subtotal, 2980);
-    expect(order.total, 3180);
+    expect(order.subtotal, 1804);
+    expect(order.total, 2004);
     expect(order.paid, false);
     expect(s.cart, isEmpty);
   });
@@ -225,8 +263,8 @@ void main() {
     final commission = s.walletEntries.singleWhere(
       (entry) => entry.orderId == order.id && entry.type == 'commission',
     );
-    expect(merchantSale.amount, 2484);
-    expect(commission.amount, 276);
+    expect(merchantSale.amount, 1480);
+    expect(commission.amount, 148);
   });
 
   test('withdrawal consumes the available courier balance once', () async {

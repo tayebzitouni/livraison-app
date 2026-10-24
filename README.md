@@ -6,6 +6,16 @@ La version 1.4 ajoute l'accès client sans inscription, l'approbation des prix p
 
 La version 1.4.1 place la navigation dans une barre flottante, rend l'adresse de livraison modifiable et mémorisée, et simplifie la connexion des partenaires. L'accès administrateur se trouve sur un lien séparé de la sélection des rôles ; le client utilise directement l'accueil sans connexion.
 
+## Version 1.6
+
+- **Commandes du client** : chaque appareil a son compte client invité sur le serveur. Les commandes y sont enregistrées (historique « Mes commandes »), arrivent chez les livreurs et le client les suit sur une ligne cuisine → livreur → client.
+- **Confirmation WhatsApp** : la commande est enregistrée avant l'ouverture de WhatsApp, avec son code dans le message. Les erreurs de saisie s'affichent dans la fenêtre de commande.
+- **Session conservée** : la connexion d'un partenaire survit à la fermeture de l'application ; « Se déconnecter » la supprime.
+- **Inscription des cuisines** : une cuisine peut créer son compte depuis l'écran partenaire. Les livreurs et supérettes sont toujours ouverts par l'administrateur.
+- **Tableau de bord administrateur** par jour (ventes, commandes, nouveaux utilisateurs, commission) avec navigation entre les dates ; tarifs (commission, livraison) appliqués immédiatement aux nouvelles commandes.
+- **Revenus du livreur** jour par jour (« Droits de livraison ») ; notifications dans l'application (bannière) et boutons WhatsApp avec détails de commande et itinéraire.
+- Photo, ingrédients et allergènes sont facultatifs : nom, description, prix de gros et catégorie suffisent pour proposer un plat ou un produit.
+
 ## Parcours métier
 
 `Client passe la commande → Livreur valide → Restaurant/Supérette accepte et prépare → Livreur récupère → Livreur livre → Client confirme la réception`
@@ -63,3 +73,26 @@ npx wrangler d1 migrations apply livraison-prod --remote
 
 Le Worker applique les permissions et transitions côté serveur, utilise des requêtes D1 préparées, PBKDF2 pour les nouveaux mots de passe et crée les mouvements de portefeuille après la confirmation du client.
 Après le déploiement, créer le premier administrateur depuis l'écran d'inscription avec le code `ADMIN_SETUP_TOKEN`.
+
+## Tests
+
+```bash
+flutter test
+```
+
+Les tests de bout en bout contre un Worker local (base D1 locale avec `seed.sql`) s'activent avec l'URL de l'API :
+
+```bash
+cd cloudflare/worker && npx wrangler dev --local --var ADMIN_SETUP_TOKEN:test
+flutter test --dart-define=API_BASE_URL=http://127.0.0.1:8787 --dart-define=LIVE_ADMIN_PASSWORD=<mot de passe admin> test/live_flows_test.dart
+```
+
+`test/arabic_audit_test.dart` échoue si un texte français reste affiché quand la langue est l'arabe.
+
+## Politiques publiques
+
+- Confidentialité : https://livraison-api.story-trends-dz.workers.dev/privacy
+- Conditions : https://livraison-api.story-trends-dz.workers.dev/terms
+- Remboursement : https://livraison-api.story-trends-dz.workers.dev/refund
+
+Fiche Play Store (textes, captures, liens) : `docs/play-store.md`.

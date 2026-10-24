@@ -53,7 +53,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   };
   String date(DateTime d) =>
       '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
-  String money(int n) => '$n DA';
+  String money(int n) => widget.store.language == 'ar' ? '$n دج' : '$n DA';
   String roleLabel(UserRole role) => widget.store.language == 'ar'
       ? switch (role) {
           UserRole.client => 'زبون',
@@ -82,6 +82,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
           'delivery_fee' => 'رسوم التوصيل',
           'commission' => 'العمولة',
           'withdrawal' => 'سحب',
+          'admin_payment' => 'دفعة المدير',
           _ => type,
         }
       : switch (type) {
@@ -89,6 +90,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
           'delivery_fee' => 'Frais de livraison',
           'commission' => 'Commission',
           'withdrawal' => 'Retrait',
+          'admin_payment' => 'Paiement administrateur',
           _ => type,
         };
   String approval(String value) => widget.store.language == 'ar'
@@ -413,7 +415,8 @@ class AccountLedger {
 String reportDate(DateTime d) =>
     '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
 
-String reportMoney(int n) => '$n DA';
+String reportMoneyIn(MarketplaceStore store, int n) =>
+    store.language == 'ar' ? '$n دج' : '$n DA';
 
 String reportRoleLabel(MarketplaceStore store, UserRole role) =>
     store.language == 'ar'
@@ -448,6 +451,7 @@ String reportEntryType(MarketplaceStore store, String type) =>
         'delivery_fee' => 'رسوم التوصيل',
         'commission' => 'العمولة',
         'withdrawal' => 'سحب',
+        'admin_payment' => 'دفعة المدير',
         _ => type,
       }
     : switch (type) {
@@ -455,6 +459,7 @@ String reportEntryType(MarketplaceStore store, String type) =>
         'delivery_fee' => 'Frais de livraison',
         'commission' => 'Commission',
         'withdrawal' => 'Retrait',
+        'admin_payment' => 'Paiement administrateur',
         _ => type,
       };
 
@@ -540,13 +545,13 @@ Future<Uint8List> buildAccountReportPdf(
         ),
         pw.Text('${store.tr('Annulées', 'ملغاة')} : ${ledger.cancelledCount}'),
         pw.Text(
-          '${store.tr('Total des commandes', 'مجموع الطلبات')} : ${reportMoney(ledger.orderTotal)}',
+          '${store.tr('Total des commandes', 'مجموع الطلبات')} : ${reportMoneyIn(store, ledger.orderTotal)}',
         ),
         pw.Text(
-          '${store.tr('Revenus du portefeuille', 'إيرادات المحفظة')} : ${reportMoney(ledger.walletIncome)}',
+          '${store.tr('Revenus du portefeuille', 'إيرادات المحفظة')} : ${reportMoneyIn(store, ledger.walletIncome)}',
         ),
         pw.Text(
-          '${store.tr('Solde', 'الرصيد')} : ${reportMoney(ledger.walletBalance)}',
+          '${store.tr('Solde', 'الرصيد')} : ${reportMoneyIn(store, ledger.walletBalance)}',
         ),
         if (user.role == UserRole.restaurant ||
             user.role == UserRole.supermarket)
@@ -572,20 +577,20 @@ Future<Uint8List> buildAccountReportPdf(
               crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
                 pw.Text(
-                  '${o.id} · ${reportDate(o.createdAt)} · ${reportStatus(store, o.status)} · ${reportMoney(o.total)}',
+                  '${o.id} · ${reportDate(o.createdAt)} · ${reportStatus(store, o.status)} · ${reportMoneyIn(store, o.total)}',
                   style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
                 ),
                 pw.Text(
                   '${store.tr('Client', 'الزبون')} : ${o.clientName ?? o.clientId} · ${store.tr('Partenaire', 'الشريك')} : ${o.merchantName ?? o.merchantId} · ${store.tr('Livreur', 'الموصل')} : ${o.courierName ?? o.courierId ?? '-'}',
                 ),
                 pw.Text(
-                  '${store.tr('Adresse', 'العنوان')} : ${o.address} · ${store.tr('Livraison', 'التوصيل')} : ${reportMoney(o.deliveryFee)} · ${store.tr('Commission', 'العمولة')} : ${reportMoney(o.commissionAmount)}',
+                  '${store.tr('Adresse', 'العنوان')} : ${o.address} · ${store.tr('Livraison', 'التوصيل')} : ${reportMoneyIn(store, o.deliveryFee)} · ${store.tr('Commission', 'العمولة')} : ${reportMoneyIn(store, o.commissionAmount)}',
                 ),
                 if (o.note.isNotEmpty)
                   pw.Text('${store.tr('Note', 'ملاحظة')} : ${o.note}'),
                 ...o.items.map(
                   (i) => pw.Text(
-                    '  ${i.quantity} × ${i.product.name} : ${reportMoney(i.total)}',
+                    '  ${i.quantity} × ${i.product.name} : ${reportMoneyIn(store, i.total)}',
                   ),
                 ),
               ],
@@ -606,7 +611,7 @@ Future<Uint8List> buildAccountReportPdf(
           ),
         ...ledger.wallet.map(
           (e) => pw.Text(
-            '${reportDate(e.createdAt)} · ${reportEntryType(store, e.type)} · ${e.orderId ?? '-'} · ${reportMoney(e.amount)}',
+            '${reportDate(e.createdAt)} · ${reportEntryType(store, e.type)} · ${e.orderId ?? '-'} · ${reportMoneyIn(store, e.amount)}',
           ),
         ),
         if (user.role == UserRole.restaurant ||
@@ -622,7 +627,7 @@ Future<Uint8List> buildAccountReportPdf(
             ),
           ...ledger.catalog.map(
             (p) => pw.Text(
-              '${p.name} · ${store.tr('Gros', 'الجملة')} ${reportMoney(p.wholesalePrice)} · ${store.tr('Client', 'الزبون')} ${reportMoney(p.retailPrice)} · ${reportApproval(store, p.approvalStatus)} · ${p.available ? store.tr('Disponible', 'متوفر') : store.tr('Indisponible', 'غير متوفر')}',
+              '${p.name} · ${store.tr('Gros', 'الجملة')} ${reportMoneyIn(store, p.wholesalePrice)} · ${store.tr('Client', 'الزبون')} ${reportMoneyIn(store, p.retailPrice)} · ${reportApproval(store, p.approvalStatus)} · ${p.available ? store.tr('Disponible', 'متوفر') : store.tr('Indisponible', 'غير متوفر')}',
             ),
           ),
         ],
