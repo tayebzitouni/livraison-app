@@ -2891,6 +2891,112 @@ class StatusPill extends StatelessWidget {
   }
 }
 
+class PartnerMoneySummary extends StatelessWidget {
+  const PartnerMoneySummary({
+    super.key,
+    required this.store,
+    required this.orders,
+  });
+  final MarketplaceStore store;
+  final List<MarketOrder> orders;
+
+  @override
+  Widget build(BuildContext context) {
+    final user = store.currentUser!;
+    final courier = user.role == UserRole.courier;
+    final amounts = PartnerAmounts(orders);
+    final payments = store.currentWalletEntries
+        .where((entry) => entry.amount < 0)
+        .fold<int>(0, (sum, entry) => sum - entry.amount);
+    Widget line(String label, int amount, {bool strong = false}) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        children: [
+          Expanded(child: Text(label)),
+          const SizedBox(width: 12),
+          Text(
+            dzd(amount),
+            style: TextStyle(
+              fontWeight: strong ? FontWeight.w900 : FontWeight.w600,
+              color: strong ? green : ink,
+            ),
+          ),
+        ],
+      ),
+    );
+    return Card(
+      key: const Key('partner-money-summary'),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              store.tr('Détail de vos montants', 'تفاصيل مبالغك'),
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              store.tr(
+                'Commandes confirmées du jour sélectionné.',
+                'الطلبات المؤكدة لليوم المختار.',
+              ),
+            ),
+            line(
+              courier
+                  ? store.tr('Total des commandes', 'إجمالي الطلبات')
+                  : store.tr('Ventes aux clients', 'المبيعات للعملاء'),
+              courier ? amounts.total : amounts.sales,
+            ),
+            line(
+              store.tr('Commission plateforme', 'عمولة المنصة'),
+              amounts.commission,
+            ),
+            if (courier)
+              line(
+                store.tr('Part des commerces', 'حصة المتاجر'),
+                amounts.merchantNet,
+              ),
+            line(
+              store.tr('Votre montant net', 'صافي مستحقاتك'),
+              courier ? amounts.delivery : amounts.merchantNet,
+              strong: true,
+            ),
+            Text(
+              store.tr(
+                courier
+                    ? 'Votre net correspond aux frais de livraison. La commission est incluse dans le prix des produits.'
+                    : 'Votre net = ventes − commission. Les frais de livraison sont exclus.',
+                courier
+                    ? 'صافيك هو رسوم التوصيل. عمولة المنصة مشمولة في سعر المنتجات.'
+                    : 'صافيك = المبيعات − العمولة. رسوم التوصيل غير مشمولة.',
+              ),
+              style: const TextStyle(color: muted, fontSize: 12),
+            ),
+            const Divider(height: 26),
+            Text(
+              store.tr('Votre solde · tous les jours', 'رصيدك · جميع الأيام'),
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            line(
+              store.tr(
+                'Paiements / retraits enregistrés',
+                'الدفعات والسحوبات المسجلة',
+              ),
+              payments,
+            ),
+            line(
+              store.tr('Crédit restant à recevoir', 'الرصيد المتبقي للاستلام'),
+              store.walletBalanceFor(user.id),
+              strong: true,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class MerchantHome extends StatefulWidget {
   const MerchantHome({super.key, required this.store, required this.products});
   final MarketplaceStore store;
@@ -2930,18 +3036,7 @@ class _MerchantHomeState extends State<MerchantHome> {
             .where((order) => sameDay(order.createdAt, day))
             .toList(),
         own = store.products.where((p) => p.ownerId == u.id).toList(),
-        revenue = os
-            .where((o) => o.status == OrderStatus.clientConfirmed)
-            .fold<int>(
-              0,
-              (sum, order) =>
-                  sum +
-                  order.items.fold<int>(
-                    0,
-                    (itemSum, item) =>
-                        itemSum + item.product.wholesalePrice * item.quantity,
-                  ),
-            );
+        revenue = PartnerAmounts(os).merchantNet;
     return PageFrame(
       title: u.businessName ?? u.name,
       subtitle: store.tr(
@@ -3010,6 +3105,8 @@ class _MerchantHomeState extends State<MerchantHome> {
             ),
           ]),
           const SizedBox(height: 27),
+          PartnerMoneySummary(store: store, orders: os),
+          const SizedBox(height: 22),
           SectionTitle(
             store.tr('Commandes du jour choisi', 'طلبات اليوم المختار'),
             action: '${os.length}',
@@ -3247,17 +3344,7 @@ class _CourierHomeState extends State<CourierHome> {
         offers = os
             .where((o) => o.courierId == null && o.status == OrderStatus.placed)
             .toList();
-    final dayWallet = store.currentWalletEntries
-        .where(
-          (entry) =>
-              entry.type == 'delivery_fee' && sameDay(entry.createdAt, day),
-        )
-        .fold<int>(0, (sum, entry) => sum + entry.amount);
-    final revenue = store.currentWalletEntries.isEmpty
-        ? dayOrders
-              .where((order) => order.status == OrderStatus.clientConfirmed)
-              .fold<int>(0, (sum, order) => sum + order.deliveryFee)
-        : dayWallet;
+    final revenue = PartnerAmounts(dayOrders).delivery;
     return PageFrame(
       title: 'Prêt à livrer ?',
       subtitle: 'Restez en ligne et faites avancer les commandes.',
@@ -3311,6 +3398,8 @@ class _CourierHomeState extends State<CourierHome> {
             ),
           ]),
           const SizedBox(height: 27),
+          PartnerMoneySummary(store: store, orders: dayOrders),
+          const SizedBox(height: 22),
           if (active.isNotEmpty) ...[
             const SectionTitle('Livraison active'),
             const SizedBox(height: 12),

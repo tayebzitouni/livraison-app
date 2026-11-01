@@ -222,6 +222,24 @@ class MarketOrder {
   int get total => subtotal + deliveryFee;
 }
 
+/// Completed-order amounts use the prices and commission saved on each order.
+class PartnerAmounts {
+  PartnerAmounts(Iterable<MarketOrder> orders) {
+    for (final order in orders) {
+      if (order.status != OrderStatus.clientConfirmed) continue;
+      sales += order.subtotal;
+      commission += order.commissionAmount;
+      delivery += order.deliveryFee;
+    }
+  }
+
+  int sales = 0;
+  int commission = 0;
+  int delivery = 0;
+  int get total => sales + delivery;
+  int get merchantNet => sales - commission;
+}
+
 class WalletEntry {
   const WalletEntry({
     required this.id,
